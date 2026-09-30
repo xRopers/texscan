@@ -77,3 +77,20 @@ fn extract_refuses_a_changed_input_unless_forced() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("does not match the manifest"));
     assert!(run(true).status.success());
 }
+
+#[test]
+fn extract_png_writes_one_png_per_image() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = texscan_fixtures::dds_archive();
+    let input = write_fixture(dir.path(), &f);
+    let out_dir = dir.path().join("out");
+    let out = texscan().arg("extract").arg(&input).arg("-d").arg(&out_dir).arg("--png").arg("--json").output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let pngs: usize = json.as_array().unwrap().iter().map(|t| t["pngs"].as_array().map_or(0, Vec::len)).sum();
+    // One per plain texture, 6 per cube, 8 volume slices, 3 array elements.
+    let expected: u32 = f.expected.iter().map(|e| e.spec.faces() * e.spec.array_size * e.spec.depth).sum();
+    assert_eq!(pngs, expected as usize);
+    let cube = f.expected.iter().find(|e| e.spec.cube).unwrap();
+    assert!(out_dir.join(format!("{:08x}_nz.png", cube.offset)).exists());
+}

@@ -47,6 +47,10 @@ enum Command {
         /// Extract even if the input's size or CRC no longer matches the manifest
         #[arg(long)]
         force: bool,
+        /// Also save each texture as PNG: the top mip, one file per array element, cube
+        /// face (_px, _nx, _py, _ny, _pz, _nz) and depth slice
+        #[arg(long)]
+        png: bool,
         /// Filters for the fresh scan (ignored with --manifest)
         #[command(flatten)]
         filters: ScanArgs,
@@ -104,7 +108,7 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
-        Command::Extract { file, manifest, dir, force, filters } => {
+        Command::Extract { file, manifest, dir, force, png, filters } => {
             let data = input::open(&file)?;
             let manifest = match &manifest {
                 Some(path) => Manifest::load(path)?,
@@ -117,13 +121,32 @@ fn run(cli: Cli) -> Result<()> {
             if manifest.textures.is_empty() {
                 bail!("no textures to extract");
             }
-            let files = extract_all(&data, &manifest, &dir, &ExtractOptions { verify_source: !force })?;
+            let files = extract_all(&data, &manifest, &dir, &ExtractOptions { verify_source: !force, png })?;
             if cli.json {
-                let rows: Vec<_> =
-                    files.iter().map(|f| ExtractJson { id: f.id, offset: f.offset, path: f.path.display().to_string(), size: f.size }).collect();
+                let rows: Vec<_> = files
+                    .iter()
+                    .map(|f| ExtractJson {
+                        id: f.id,
+                        offset: f.offset,
+                        path: f.path.display().to_string(),
+                        size: f.size,
+                        pngs: &f.pngs,
+                        png_error: f.png_error.as_deref(),
+                    })
+                    .collect();
                 print_json(&rows)?;
             } else {
+                for f in &files {
+                    if let Some(e) = &f.png_error {
+                        println!("{}: no PNG: {e}", f.path.display());
+                    }
+                }
                 println!("{} texture(s) extracted to {}", files.len(), dir.display());
+                if png {
+                    let failed = files.iter().filter(|f| f.png_error.is_some()).count();
+                    let written: usize = files.iter().map(|f| f.pngs.len()).sum();
+                    println!("{written} PNG(s) written{}", if failed > 0 { format!(", {failed} texture(s) couldn't be decoded") } else { String::new() });
+                }
             }
         }
     }
@@ -137,11 +160,15 @@ struct ScanJson<'a> {
 }
 
 #[derive(Serialize)]
-struct ExtractJson {
+struct ExtractJson<'a> {
     id: u32,
     offset: u64,
     path: String,
     size: u64,
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    pngs: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    png_error: Option<&'a str>,
 }
 
 fn print_json<T: Serialize + ?Sized>(value: &T) -> Result<()> {

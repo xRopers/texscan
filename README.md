@@ -6,7 +6,7 @@ Many games keep standard DDS textures, headers and all, inside their own archive
 
 It's a sibling of [zscan](https://github.com/xRopers/zscan), which does the same for compressed streams, and works the same way: a scan writes a JSON manifest, and later steps work from it.
 
-**Status: early.** Scanning and extracting DDS textures work. Putting edited textures back (like packzip), more formats (KTX, PNG and others) and a desktop app are next.
+**Status: early.** Scanning DDS textures, extracting them and exporting them as PNG work. Putting edited textures back (like packzip), more formats (KTX, PNG and others) and a desktop app are next.
 
 ## Build
 
@@ -21,6 +21,7 @@ cargo build --release
 ```bash
 texscan scan game.pak -o manifest.json      # list textures, write a manifest
 texscan extract game.pak -m manifest.json -d textures/
+texscan extract game.pak -m manifest.json -d textures/ --png   # also as PNG
 ```
 
 ```
@@ -34,6 +35,8 @@ texscan extract game.pak -m manifest.json -d textures/
 
 Every command takes `--json`. The input is never modified. `extract` refuses a file that no longer matches the manifest (`--force` overrides).
 
+`--png` also saves each texture's full-size image as PNG: one file per array element, cube face (`_px`, `_nx`, `_py`, `_ny`, `_pz`, `_nz`) and volume slice. Colours are exported as stored: sRGB stays sRGB, HDR values are clipped to 0–1, and single-channel formats come out grey.
+
 `--show-rejected` lists headers that look like DDS but can't be used, and why (for example an unknown pixel format, or a texture cut off by the end of the file).
 
 ## DDS support
@@ -42,7 +45,9 @@ Every command takes `--json`. The input is never modified. `extract` refuses a f
 - DX10 headers: every DXGI format except planar video formats (NV12 and similar).
 - Mipmaps, cube maps, volume textures and texture arrays.
 
-Checked against 123 real DDS files covering most legacy formats: each one's size is worked out exactly.
+Checked against 123 real DDS files covering most legacy formats: each one's size is worked out exactly, and the PNGs match an independent decoder (Pillow) to within rounding wherever it supports the format.
+
+Every format above can be exported to PNG except CxV8U8, planar video formats, depth-stencil formats and most typeless formats.
 
 Textures stored without a header can't be found this way. That includes Unity's Texture2D and Unreal's `.uasset`/`.ubulk`, which keep raw pixel data. A later version will let you describe them by hand.
 

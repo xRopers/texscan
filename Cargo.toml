@@ -12,10 +12,12 @@ rust-version = "1.89"
 texscan-core = { path = "crates/texscan-core" }
 texscan-fixtures = { path = "crates/texscan-fixtures" }
 anyhow = "1"
+bcdec_rs = "0.2"
 clap = { version = "4", features = ["derive"] }
 crc32fast = "1.4"
 memchr = "2"
 memmap2 = "0.9"
+png = "0.18"
 rayon = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

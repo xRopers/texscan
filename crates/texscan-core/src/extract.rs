@@ -6,17 +6,22 @@ use std::path::{Path, PathBuf};
 use rayon::prelude::*;
 
 use crate::error::{Error, Result, io_err};
+use crate::export::write_pngs;
+use crate::format::format_for;
 use crate::manifest::{Manifest, TextureEntry};
 
 #[derive(Debug, Clone)]
 pub struct ExtractOptions {
     /// Refuse to extract if the input's size or CRC differs from the manifest's.
     pub verify_source: bool,
+    /// Also write each texture's top mip as PNG (one per array element, cube face and
+    /// depth slice; see [`crate::export::png_images`]).
+    pub png: bool,
 }
 
 impl Default for ExtractOptions {
     fn default() -> Self {
-        Self { verify_source: true }
+        Self { verify_source: true, png: false }
     }
 }
 
@@ -26,6 +31,10 @@ pub struct ExtractedFile {
     pub offset: u64,
     pub path: PathBuf,
     pub size: u64,
+    /// PNG files written next to it, by name.
+    pub pngs: Vec<String>,
+    /// Why no PNG was written, when one was asked for.
+    pub png_error: Option<String>,
 }
 
 /// The bytes of one texture, checked against the manifest's CRC.
@@ -59,7 +68,19 @@ pub fn extract_all(data: &[u8], manifest: &Manifest, out_dir: &Path, opts: &Extr
         .map(|(entry, bytes)| {
             let path = out_dir.join(&entry.file);
             fs::write(&path, bytes).map_err(io_err(&path))?;
-            Ok(ExtractedFile { id: entry.id, offset: entry.offset, path, size: bytes.len() as u64 })
+            let (mut pngs, mut png_error) = (Vec::new(), None);
+            if opts.png {
+                let stem = entry.file.rsplit_once('.').map_or(entry.file.as_str(), |(stem, _)| stem);
+                let result = match format_for(entry.format).parse(bytes) {
+                    Ok(info) => write_pngs(bytes, &info, out_dir, stem)?.map_err(|e| e.to_string()),
+                    Err(_) => Err("the header no longer parses".to_string()),
+                };
+                match result {
+                    Ok(names) => pngs = names,
+                    Err(e) => png_error = Some(e),
+                }
+            }
+            Ok(ExtractedFile { id: entry.id, offset: entry.offset, path, size: bytes.len() as u64, pngs, png_error })
         })
         .collect()
 }

@@ -14,7 +14,7 @@
 //! [`TextureInfo::header_size`] includes it.
 
 use crate::format::{Container, Reject, TextureFormat, TextureInfo, u32_le};
-use crate::pixel::{self, DxgiError, Layout, PixelFormat};
+use crate::pixel::{self, Decode, DxgiError, Layout, PixelFormat};
 
 pub struct Dds;
 
@@ -189,17 +189,19 @@ fn legacy_format(flags: u32, fourcc: [u8; 4], masks: [u32; 5]) -> Result<PixelFo
             b"DXT4" => pf("DXT4", Some(77), Block { bytes: 16 }),
             b"DXT5" => pf("DXT5", Some(77), Block { bytes: 16 }),
             // DXT5 with red and alpha swapped, from Doom 3's normal maps.
-            b"RXGB" => pf("RXGB", None, Block { bytes: 16 }),
+            b"RXGB" => Ok(PixelFormat::new("RXGB", None, Block { bytes: 16 }).with_decode(Decode::Rxgb)),
             b"ATI1" => pf("ATI1", Some(80), Block { bytes: 8 }),
             b"BC4U" => pf("BC4U", Some(80), Block { bytes: 8 }),
             b"BC4S" => pf("BC4S", Some(81), Block { bytes: 8 }),
             b"ATI2" => pf("ATI2", Some(83), Block { bytes: 16 }),
             b"BC5U" => pf("BC5U", Some(83), Block { bytes: 16 }),
             b"BC5S" => pf("BC5S", Some(84), Block { bytes: 16 }),
-            b"RGBG" => pf("RGBG", Some(68), Pair { bytes: 4 }),
-            b"GRGB" => pf("GRGB", Some(69), Pair { bytes: 4 }),
+            // D3D9 names channels from the top bit down and DXGI from the bottom up, so
+            // D3DFMT_R8G8_B8G8 is DXGI's G8R8_G8B8 (checked against Qt's test images).
+            b"RGBG" => pf("RGBG", Some(69), Pair { bytes: 4 }),
+            b"GRGB" => pf("GRGB", Some(68), Pair { bytes: 4 }),
             b"YUY2" => pf("YUY2", Some(107), Pair { bytes: 4 }),
-            b"UYVY" => pf("UYVY", None, Pair { bytes: 4 }),
+            b"UYVY" => Ok(PixelFormat::new("UYVY", None, Pair { bytes: 4 }).with_decode(Decode::Uyvy)),
             // D3DFORMAT numbers stored as the FourCC.
             _ => match u32::from_le_bytes(fourcc) {
                 36 => pf("A16B16G16R16", Some(11), Linear { bits: 64 }),
@@ -219,10 +221,12 @@ fn legacy_format(flags: u32, fourcc: [u8; 4], masks: [u32; 5]) -> Result<PixelFo
         };
     }
     if flags & DDPF_PALETTEINDEXED8 != 0 {
-        return pf("P8", Some(113), Linear { bits: 8 });
+        let palette = Decode::Palette { offset: BASE_SIZE as u32 };
+        return Ok(PixelFormat::new("P8", Some(113), Linear { bits: 8 }).with_decode(palette));
     }
     if flags & DDPF_PALETTEINDEXED4 != 0 {
-        return pf("P4", None, Linear { bits: 4 });
+        let palette = Decode::Palette { offset: BASE_SIZE as u32 };
+        return Ok(PixelFormat::new("P4", None, Linear { bits: 4 }).with_decode(palette));
     }
     if flags & (DDPF_RGB | DDPF_LUMINANCE | DDPF_ALPHA | DDPF_YUV | DDPF_BUMPDUDV | DDPF_BUMPLUMINANCE) == 0 {
         return Err(bad(format!("no pixel format (flags {flags:#x})")));
@@ -244,6 +248,7 @@ fn legacy_format(flags: u32, fourcc: [u8; 4], masks: [u32; 5]) -> Result<PixelFo
             (16, 0xff, 0xff00, 0, 0) => Some(("V8U8", Some(51))),
             (32, 0xffff, 0xffff_0000, 0, 0) => Some(("V16U16", Some(37))),
             (32, 0xff, 0xff00, 0xff_0000, 0xff00_0000) => Some(("Q8W8V8U8", Some(31))),
+            (32, 0x3ff0_0000, 0xffc00, 0x3ff, 0xc000_0000) => Some(("A2W10V10U10", None)),
             _ => None,
         }
     } else if flags & DDPF_BUMPLUMINANCE != 0 {
@@ -290,7 +295,20 @@ fn legacy_format(flags: u32, fourcc: [u8; 4], masks: [u32; 5]) -> Result<PixelFo
         24 => ("24-bit (other masks)", None),
         _ => ("32-bit (other masks)", None),
     });
-    pf(name, dxgi, layout)
+    // Always decoded by mask: the DXGI equivalents are only equivalent in storage.
+    let luminance = flags & DDPF_LUMINANCE != 0;
+    // D3DX wrote A2W10V10U10's U and W masks swapped (U is the low 10 bits, as the name
+    // says); DirectXTex's reference header has the same swap, so undo it for decoding.
+    let (r, b) = if name == "A2W10V10U10" { (b, r) } else { (r, b) };
+    // Bump maps store signed U, V (and W); bump-luminance keeps its L unsigned.
+    let signed = if flags & DDPF_BUMPDUDV != 0 {
+        0b0111
+    } else if flags & DDPF_BUMPLUMINANCE != 0 {
+        0b0011
+    } else {
+        0
+    };
+    Ok(PixelFormat::new(name, dxgi, layout).with_decode(Decode::Masks { r, g, b, a, luminance, signed }))
 }
 
 #[cfg(test)]
@@ -347,7 +365,7 @@ mod tests {
 
     #[test]
     fn palettized_includes_the_palette() {
-        let mut d = header(4, 4, 1, b"    ");
+        let mut d = header(4, 4, 1, b"\0\0\0\0");
         put(&mut d, 80, DDPF_PALETTEINDEXED8);
         put(&mut d, 88, 8);
         d.resize(BASE_SIZE + 1024 + 16, 0);

@@ -34,11 +34,40 @@ pub struct PixelFormat {
     /// The matching DXGI format, if there is one.
     pub dxgi: Option<u32>,
     pub layout: Layout,
+    /// How [`crate::decode`] turns it into RGBA.
+    pub decode: Decode,
+}
+
+/// How to decode a pixel format. Legacy formats with a DXGI equivalent don't always
+/// decode like it (A8L8 is stored like R8G8 but means grey plus alpha), so the format
+/// says which applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decode {
+    /// Like the DXGI format in [`PixelFormat::dxgi`].
+    Dxgi,
+    /// Channels picked out by bit masks (legacy DDS). With `luminance`, the red mask is
+    /// grey. Bit `i` of `signed` marks channel `i` (R, G, B, A) as two's complement, as
+    /// in bump maps; those are shown with 0 as mid-grey. The bit count comes from the
+    /// layout.
+    Masks { r: u32, g: u32, b: u32, a: u32, luminance: bool, signed: u8 },
+    /// Indices into a palette of four-byte RGBA entries stored `offset` bytes into the
+    /// texture.
+    Palette { offset: u32 },
+    /// BC3 with red kept in the alpha channel (Doom 3 normal maps).
+    Rxgb,
+    /// 4:2:2 YUV with the byte order U, Y0, V, Y1 (no DXGI equivalent).
+    Uyvy,
+    /// Not decodable yet.
+    None,
 }
 
 impl PixelFormat {
     pub const fn new(name: &'static str, dxgi: Option<u32>, layout: Layout) -> Self {
-        Self { name, dxgi, layout }
+        Self { name, dxgi, layout, decode: if dxgi.is_some() { Decode::Dxgi } else { Decode::None } }
+    }
+
+    pub const fn with_decode(self, decode: Decode) -> Self {
+        Self { decode, ..self }
     }
 
     pub fn is_block_compressed(&self) -> bool {

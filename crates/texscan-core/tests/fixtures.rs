@@ -91,7 +91,7 @@ fn extract_refuses_a_different_input() {
     let err = extract_all(&changed, &manifest, dir.path(), &ExtractOptions::default()).unwrap_err();
     assert!(matches!(err, Error::SourceMismatch(_)), "{err}");
     // Forcing past the file check still catches the changed texture.
-    let err = extract_all(&changed, &manifest, dir.path(), &ExtractOptions { verify_source: false }).unwrap_err();
+    let err = extract_all(&changed, &manifest, dir.path(), &ExtractOptions { verify_source: false, ..Default::default() }).unwrap_err();
     assert!(matches!(err, Error::Texture { id: 0, .. }), "{err}");
 }
 
