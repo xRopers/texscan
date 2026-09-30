@@ -4,7 +4,7 @@
 //!
 //! `cargo run -p texscan-fixtures --bin gen-fixtures` writes them to `tests/fixtures/`.
 //!
-//! DDS headers are written here and sizes worked out here, independently of
+//! DDS and KTX2 headers are written here and sizes worked out here, independently of
 //! texscan-core, so the tests compare two implementations.
 
 /// xorshift64*: small, fast, and stable across platforms and releases.
@@ -52,6 +52,8 @@ pub enum Unit {
     Block(u64),
     /// Bits per pixel.
     Bits(u64),
+    /// Blocks of width × height pixels, this many bytes each (ASTC).
+    Tiles(u64, u64, u64),
 }
 
 #[derive(Debug, Clone)]
@@ -84,19 +86,25 @@ impl DdsSpec {
         if self.cube { 6 } else { 1 }
     }
 
-    pub fn data_size(&self) -> usize {
-        let mut per_face = 0u64;
-        for i in 0..self.mips.max(1) {
-            let w = u64::from((self.width >> i).max(1));
-            let h = u64::from((self.height >> i).max(1));
-            let d = u64::from((self.depth >> i).max(1));
-            let image = match self.unit {
-                Unit::Block(bytes) => w.div_ceil(4) * h.div_ceil(4) * bytes,
-                Unit::Bits(bits) => (w * bits).div_ceil(8) * h,
-            };
-            per_face += image * d;
+    /// Bytes in one image of mip `i`.
+    pub fn image_size(&self, i: u32) -> u64 {
+        let w = u64::from((self.width >> i).max(1));
+        let h = u64::from((self.height >> i).max(1));
+        match self.unit {
+            Unit::Block(bytes) => w.div_ceil(4) * h.div_ceil(4) * bytes,
+            Unit::Bits(bits) => (w * bits).div_ceil(8) * h,
+            Unit::Tiles(tw, th, bytes) => w.div_ceil(tw) * h.div_ceil(th) * bytes,
         }
-        (per_face * u64::from(self.faces() * self.array_size)) as usize
+    }
+
+    /// Bytes in all of mip `i`: every layer, face and slice.
+    pub fn level_size(&self, i: u32) -> usize {
+        let d = u64::from((self.depth >> i).max(1));
+        (self.image_size(i) * d * u64::from(self.faces() * self.array_size)) as usize
+    }
+
+    pub fn data_size(&self) -> usize {
+        (0..self.mips.max(1)).map(|i| self.level_size(i)).sum()
     }
 
     pub fn header(&self) -> Vec<u8> {
@@ -168,9 +176,14 @@ impl DdsSpec {
 #[derive(Debug, Clone)]
 pub struct Expected {
     pub offset: usize,
+    /// `dds` or `ktx2`.
+    pub container: &'static str,
+    /// The texture's shape and format (for KTX2, `pf` is unused).
     pub spec: DdsSpec,
     pub size: usize,
     pub crc32: u32,
+    /// Whether texscan can decode it (not ASTC, ETC or supercompressed).
+    pub decodable: bool,
 }
 
 /// A header the scanner should report as unusable, with how its reason starts.
@@ -196,7 +209,12 @@ impl Fixture {
 
     fn texture(&mut self, spec: DdsSpec, rng: &mut Rng) {
         let bytes = spec.build(rng);
-        self.expected.push(Expected { offset: self.data.len(), size: bytes.len(), crc32: crc32fast::hash(&bytes), spec });
+        self.push("dds", spec, bytes, true);
+    }
+
+    fn push(&mut self, container: &'static str, spec: DdsSpec, bytes: Vec<u8>, decodable: bool) {
+        let crc32 = crc32fast::hash(&bytes);
+        self.expected.push(Expected { offset: self.data.len(), container, size: bytes.len(), crc32, spec, decodable });
         self.data.extend(bytes);
     }
 
@@ -234,8 +252,7 @@ pub fn dds_archive() -> Fixture {
     let (pf, unit) = dxt(b"DXT5");
     let inner = DdsSpec::new(8, 8, 1, pf, unit, "DXT5", Some(77)).build(&mut rng);
     bytes[1000..1000 + inner.len()].copy_from_slice(&inner);
-    f.expected.push(Expected { offset: f.data.len(), size: bytes.len(), crc32: crc32fast::hash(&bytes), spec: outer });
-    f.data.extend(bytes);
+    f.push("dds", outer, bytes, true);
     f.filler(37, &mut rng);
 
     let (pf, unit) = dxt(b"DXT5");
@@ -295,6 +312,111 @@ pub fn dds_file() -> Fixture {
     f
 }
 
+pub const KTX2_MAGIC: &[u8; 12] = b"\xABKTX 20\xBB\r\n\x1A\n";
+
+/// A KTX2 texture of `spec`'s shape with Vulkan format `vk`: header, level index, a
+/// small data format descriptor and key/value data, then the levels smallest first,
+/// each 16-byte aligned. With `scheme` (supercompression) non-zero the levels get
+/// made-up lengths, as compressed data would. `spec.mips` 0 is written as a level
+/// count of 0 (one level).
+pub fn ktx2(spec: &DdsSpec, vk: u32, scheme: u32, rng: &mut Rng) -> Vec<u8> {
+    let levels = spec.mips.max(1) as usize;
+    let index_at = 80;
+    let dfd_at = index_at + levels * 24;
+    let dfd_len = 44;
+    let kvd_at = dfd_at + dfd_len;
+    let mut kvd = Vec::new();
+    let entry = b"KTXwriter\0texscan fixtures\0";
+    kvd.extend_from_slice(&(entry.len() as u32).to_le_bytes());
+    kvd.extend_from_slice(entry);
+    kvd.resize(kvd.len().next_multiple_of(4), 0);
+    let layers = if spec.array_size > 1 { spec.array_size } else { 0 };
+    let depth = if spec.depth > 1 { spec.depth } else { 0 };
+    let mut out = KTX2_MAGIC.to_vec();
+    for v in [vk, 1, spec.width, spec.height, depth, layers, spec.faces(), spec.mips, scheme] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    for v in [dfd_at as u32, dfd_len as u32, kvd_at as u32, kvd.len() as u32] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out.extend_from_slice(&[0u8; 16]);
+    // Level data, smallest mip first.
+    let mut at = kvd_at + kvd.len();
+    let mut placed = vec![(0usize, Vec::new()); levels];
+    for m in (0..levels).rev() {
+        at = at.next_multiple_of(16);
+        let len = if scheme == 0 { spec.level_size(m as u32) } else { spec.level_size(m as u32) / 3 + 5 };
+        placed[m] = (at, rng.bytes(len));
+        at += len;
+    }
+    for (offset, bytes) in &placed {
+        let uncompressed = bytes.len() as u64;
+        for v in [*offset as u64, bytes.len() as u64, uncompressed] {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    out.extend_from_slice(&(dfd_len as u32).to_le_bytes());
+    out.resize(kvd_at, 0);
+    out.extend_from_slice(&kvd);
+    out.resize(at, 0);
+    for (offset, bytes) in placed {
+        out[offset..offset + bytes.len()].copy_from_slice(&bytes);
+    }
+    out
+}
+
+/// KTX2 textures of every layout (and a DDS among them) in an archive, plus traps.
+pub fn ktx2_archive() -> Fixture {
+    let mut rng = Rng::new(0x4B7);
+    let mut f = Fixture::new(
+        "ktx2_archive",
+        "KTX2 textures (BC7, cube, array, volume, 24-bit, ASTC, supercompressed) and a DDS in an archive, plus traps",
+    );
+    f.data.extend_from_slice(b"KPAK");
+    f.filler(44, &mut rng);
+    let add = |f: &mut Fixture, rng: &mut Rng, spec: DdsSpec, vk: u32, scheme: u32, decodable: bool| {
+        let bytes = ktx2(&spec, vk, scheme, rng);
+        f.push("ktx2", spec, bytes, decodable);
+    };
+    let unit16 = Unit::Block(16);
+    add(&mut f, &mut rng, DdsSpec::new(128, 64, 8, Pf::Dx10(0), unit16, "BC7_SRGB_BLOCK", Some(99)), 146, 0, true);
+    f.filler(13, &mut rng);
+    let mut cube = DdsSpec::new(32, 32, 6, Pf::Dx10(0), Unit::Bits(32), "R8G8B8A8_SRGB", Some(29));
+    cube.cube = true;
+    add(&mut f, &mut rng, cube, 43, 0, true);
+    let mut array = DdsSpec::new(16, 16, 5, Pf::Dx10(0), Unit::Bits(64), "R16G16B16A16_SFLOAT", Some(10));
+    array.array_size = 3;
+    add(&mut f, &mut rng, array, 97, 0, true);
+    f.filler(7, &mut rng);
+    add(&mut f, &mut rng, DdsSpec::new(20, 12, 5, Pf::Dx10(0), Unit::Bits(24), "R8G8B8_UNORM", None), 23, 0, true);
+    add(&mut f, &mut rng, DdsSpec::new(16, 8, 0, Pf::Dx10(0), Unit::Bits(8), "R8_UNORM", Some(61)), 9, 0, true);
+    let mut volume = DdsSpec::new(16, 16, 5, Pf::Dx10(0), Unit::Bits(32), "B8G8R8A8_UNORM", Some(87));
+    volume.depth = 4;
+    add(&mut f, &mut rng, volume, 44, 0, true);
+    f.filler(29, &mut rng);
+    // A DDS among them.
+    let (pf, unit) = dxt(b"DXT1");
+    f.texture(DdsSpec::new(32, 32, 6, pf, unit, "DXT1", Some(71)), &mut rng);
+    let astc = DdsSpec::new(50, 30, 1, Pf::Dx10(0), Unit::Tiles(6, 6, 16), "ASTC_6x6_UNORM_BLOCK", None);
+    add(&mut f, &mut rng, astc, 165, 0, false);
+    let zstd = DdsSpec::new(64, 64, 7, Pf::Dx10(0), Unit::Block(8), "BC1_RGBA_UNORM_BLOCK", Some(71));
+    add(&mut f, &mut rng, zstd, 133, 2, false);
+    f.filler(40, &mut rng);
+
+    // Three faces: clearly KTX2, but unusable.
+    f.rejected.push(ExpectedReject { offset: f.data.len(), reason_prefix: "3 faces" });
+    let mut bad = ktx2(&DdsSpec::new(8, 8, 1, Pf::Dx10(0), Unit::Bits(32), "", None), 37, 0, &mut rng);
+    bad[36..40].copy_from_slice(&3u32.to_le_bytes());
+    f.data.extend(bad);
+    f.filler(21, &mut rng);
+    // Cut off by the end of the file.
+    f.rejected.push(ExpectedReject { offset: f.data.len(), reason_prefix: "truncated" });
+    let mut cut = ktx2(&DdsSpec::new(64, 64, 1, Pf::Dx10(0), Unit::Bits(32), "", None), 37, 0, &mut rng);
+    cut.truncate(cut.len() - 100);
+    f.data.extend(cut);
+    f
+}
+
 pub fn all() -> Vec<Fixture> {
-    vec![dds_archive(), dds_file()]
+    vec![dds_archive(), dds_file(), ktx2_archive()]
 }

@@ -17,7 +17,7 @@ fn main() -> std::io::Result<()> {
                 let s = &e.spec;
                 json!({
                     "offset": e.offset,
-                    "format": "dds",
+                    "format": e.container,
                     "size": e.size,
                     "width": s.width,
                     "height": s.height,
@@ -28,6 +28,7 @@ fn main() -> std::io::Result<()> {
                     "pixel_format": s.name,
                     "dxgi_format": s.dxgi,
                     "crc32": format!("{:08x}", e.crc32),
+                    "decodable": e.decodable,
                 })
             })
             .collect();

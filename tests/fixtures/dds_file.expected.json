@@ -6,6 +6,7 @@
     {
       "array_size": 1,
       "crc32": "92d4d162",
+      "decodable": true,
       "depth": 1,
       "dxgi_format": 77,
       "faces": 1,

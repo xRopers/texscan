@@ -13,7 +13,7 @@
 //! Palettized (P4, P8) files have a palette of 2^bits four-byte entries after the header;
 //! [`TextureInfo::header_size`] includes it.
 
-use crate::format::{Container, Reject, TextureFormat, TextureInfo, u32_le};
+use crate::format::{Container, Reject, Storage, TextureFormat, TextureInfo, u32_le};
 use crate::pixel::{self, Decode, DxgiError, Layout, PixelFormat};
 
 pub struct Dds;
@@ -152,7 +152,18 @@ pub fn parse(data: &[u8]) -> Result<TextureInfo, Reject> {
     if size > data.len() as u64 {
         return Err(bad(format!("truncated: needs {size} bytes, {} left in the file", data.len())));
     }
-    Ok(TextureInfo { size, header_size: header_size as u64, width, height, depth, mips, array_size, faces, pixel_format })
+    Ok(TextureInfo {
+        size,
+        header_size: header_size as u64,
+        width,
+        height,
+        depth,
+        mips,
+        array_size,
+        faces,
+        pixel_format,
+        storage: Storage::Dds,
+    })
 }
 
 /// Palettized formats keep their palette right after the header.

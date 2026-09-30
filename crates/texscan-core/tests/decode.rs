@@ -1,7 +1,7 @@
 //! Decoding fixtures: every image of a texture must come from the right bytes, and
 //! every fixture texture must decode and export.
 
-use texscan_core::{Container, ScanOptions, Subresource, decode, png_images, scan, texture_at, write_pngs};
+use texscan_core::{Container, DecodeError, ScanOptions, Subresource, decode, png_images, scan, texture_at, write_pngs};
 use texscan_fixtures::{DdsSpec, Pf, Unit};
 
 /// Texture bytes where every image is one solid colour, [id, mip, slice, 255], id being
@@ -58,10 +58,15 @@ fn volume_slices_come_from_the_right_place() {
 fn every_fixture_texture_exports_to_png() {
     let dir = tempfile::tempdir().unwrap();
     for f in texscan_fixtures::all() {
-        for t in scan(&f.data, &ScanOptions::default()).textures {
+        for (t, e) in scan(&f.data, &ScanOptions::default()).textures.into_iter().zip(&f.expected) {
             let bytes = &f.data[t.offset as usize..t.end() as usize];
             let stem = format!("{}_{:x}", f.name, t.offset);
-            let names = write_pngs(bytes, &t.info, dir.path(), &stem).unwrap().unwrap();
+            let result = write_pngs(bytes, &t.info, dir.path(), &stem).unwrap();
+            if !e.decodable {
+                assert!(matches!(result, Err(DecodeError::Unsupported(_))), "{}: {result:?}", e.spec.name);
+                continue;
+            }
+            let names = result.unwrap();
             assert_eq!(names.len(), png_images(&t.info).len());
             assert_eq!(names.len() as u32, t.info.layers() * t.info.depth);
             for name in names {

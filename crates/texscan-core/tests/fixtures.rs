@@ -7,15 +7,16 @@ use std::path::Path;
 use texscan_core::{Container, Error, ExtractOptions, Manifest, ScanOptions, SourceInfo, extract_all, scan, texture_at};
 use texscan_fixtures::Fixture;
 
-type Row = (u64, u64, u32, u32, u32, u32, u32, u32, String, Option<u32>, u32);
+type Row = (u64, String, u64, u32, u32, u32, u32, u32, u32, String, Option<u32>, u32);
 
 fn expected_rows(f: &Fixture) -> Vec<Row> {
     f.expected
         .iter()
         .map(|e| {
             let s = &e.spec;
-            let (offset, size) = (e.offset as u64, e.size as u64);
-            (offset, size, s.width, s.height, s.depth, s.mips.max(1), s.array_size, s.faces(), s.name.into(), s.dxgi, e.crc32)
+            let (offset, size, container) = (e.offset as u64, e.size as u64, e.container.to_string());
+            let mips = s.mips.max(1);
+            (offset, container, size, s.width, s.height, s.depth, mips, s.array_size, s.faces(), s.name.into(), s.dxgi, e.crc32)
         })
         .collect()
 }
@@ -26,8 +27,9 @@ fn found_rows(data: &[u8]) -> Vec<Row> {
         .iter()
         .map(|t| {
             let i = &t.info;
-            let name = i.pixel_format.name.to_string();
-            (t.offset, i.size, i.width, i.height, i.depth, i.mips, i.array_size, i.faces, name, i.pixel_format.dxgi, t.crc32)
+            let (name, container) = (i.pixel_format.name.to_string(), t.container.to_string());
+            let dxgi = i.pixel_format.dxgi;
+            (t.offset, container, i.size, i.width, i.height, i.depth, i.mips, i.array_size, i.faces, name, dxgi, t.crc32)
         })
         .collect()
 }

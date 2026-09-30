@@ -1,7 +1,7 @@
 //! Putting edited textures back into a copy of the file, in place.
 //!
-//! An edit is either a whole replacement texture (a `.dds` with the same dimensions, mips,
-//! faces, array size and pixel format, so it fits exactly) or new images for some
+//! An edit is either a whole replacement texture (a `.dds` or `.ktx2` with the same
+//! dimensions, mips, faces, array size and pixel format, so it fits exactly) or new images for some
 //! layers and slices of a texture (from PNGs), which are encoded in the texture's pixel
 //! format with their mips regenerated. Either way the texture keeps its size and its
 //! original header bytes; only pixel data changes, so nothing else in the file moves.
@@ -19,7 +19,7 @@ use crate::encode::{encode, mip_chain, volume_mip_chain};
 use crate::error::{Error, Result, io_err};
 use crate::export::{decode_png, png_images};
 use crate::extract::texture_bytes;
-use crate::format::{TextureFormat, TextureInfo, format_for};
+use crate::format::{Container, Reject, TextureInfo, format_for};
 use crate::input;
 use crate::manifest::{Manifest, TextureEntry};
 use crate::output::write_via_temp;
@@ -153,9 +153,7 @@ pub fn pack_texture(
     let fail = |reason: String| Error::Edit { id: entry.id, offset: entry.offset, reason };
     let info = format_for(entry.format).parse(original).map_err(|_| fail("its header no longer parses".into()))?;
     let (bytes, outcome, note) = match edit {
-        TextureEdit::Texture(new) => {
-            (replace_data(format_for(entry.format), original, &info, new).map_err(fail)?, Outcome::Replaced, None)
-        }
+        TextureEdit::Texture(new) => (replace_data(original, &info, new).map_err(fail)?, Outcome::Replaced, None),
         TextureEdit::Images(images) => {
             let (bytes, note) = reencode(original, &info, images).map_err(fail)?;
             (bytes, Outcome::Reencoded { images: images.len(), mips: info.mips }, note)
@@ -171,13 +169,15 @@ pub fn pack_texture(
 }
 
 /// The original header followed by the replacement's pixel data, if the layouts match.
-fn replace_data(
-    format: &dyn TextureFormat,
-    original: &[u8],
-    info: &TextureInfo,
-    new: &[u8],
-) -> std::result::Result<Vec<u8>, String> {
-    let new_info = format.parse(new).map_err(|_| format!("the replacement isn't a valid {} texture", format.container()))?;
+///
+/// The replacement can be any container (a DDS for a KTX2 texture, say): each image is
+/// copied from where the replacement keeps it to where the texture keeps it.
+fn replace_data(original: &[u8], info: &TextureInfo, new: &[u8]) -> std::result::Result<Vec<u8>, String> {
+    let container = Container::sniff(new).ok_or("the replacement isn't a DDS or KTX2 texture")?;
+    let new_info = format_for(container).parse(new).map_err(|e| match e {
+        Reject::Bad(reason) => format!("the replacement {container} can't be used: {reason}"),
+        Reject::NoMatch => format!("the replacement isn't a valid {container} texture"),
+    })?;
     let describe = |i: &TextureInfo| {
         format!(
             "{}x{}x{}, {} mips, {} layer(s), {}",
@@ -202,13 +202,20 @@ fn replace_data(
             describe(info)
         ));
     }
-    let data_len = (info.size - info.header_size) as usize;
-    let new_data = &new[new_info.header_size as usize..new_info.size as usize];
-    if new_data.len() != data_len {
-        return Err(format!("the replacement has {} bytes of pixel data, the texture {data_len}", new_data.len()));
+    if matches!(info.pixel_format.layout, Layout::Unknown) {
+        return Err(format!("{} isn't a known pixel format, so its images can't be matched up", info.pixel_format.name));
     }
-    let mut out = original[..info.header_size as usize].to_vec();
-    out.extend_from_slice(new_data);
+    let mut out = original.to_vec();
+    for layer in 0..info.layers() {
+        for mip in 0..info.mips {
+            for slice in 0..info.mip_size(mip).2 {
+                let sub = Subresource { layer, mip, slice };
+                let to = info.subresource_range(sub).map_err(|e| format!("the texture: {e}"))?;
+                let from = new_info.subresource_range(sub).map_err(|e| format!("the replacement: {e}"))?;
+                out[to].copy_from_slice(&new[from]);
+            }
+        }
+    }
     Ok(out)
 }
 
@@ -276,7 +283,7 @@ pub struct FoundEdits {
     pub unchanged: usize,
 }
 
-/// Find edits in a folder written by `extract`: a texture's `.dds` whose CRC no longer
+/// Find edits in a folder written by `extract`: a texture's file (`.dds`, `.ktx2`) whose CRC no longer
 /// matches, or PNGs (named as [`png_images`] names them) whose pixels differ from the
 /// original. Only one kind per texture.
 pub fn load_edits(data: &[u8], manifest: &Manifest, dir: &Path) -> Result<FoundEdits> {

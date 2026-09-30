@@ -13,6 +13,11 @@ pub enum Layout {
     Block { bytes: u32 },
     /// Pairs of pixels sharing `bytes` (4:2:2 formats such as YUY2 and R8G8_B8G8).
     Pair { bytes: u32 },
+    /// Blocks of `width` × `height` pixels, `bytes` each (ASTC).
+    Tiles { width: u32, height: u32, bytes: u32 },
+    /// Not known (KTX2's `UNDEFINED` for Basis Universal, or an unrecognised format): the
+    /// container says where the data is, but its images can't be located or checked.
+    Unknown,
 }
 
 impl Layout {
@@ -23,6 +28,10 @@ impl Layout {
             Layout::Linear { bits } => (w * u64::from(bits)).div_ceil(8) * h,
             Layout::Block { bytes } => w.div_ceil(4) * h.div_ceil(4) * u64::from(bytes),
             Layout::Pair { bytes } => w.div_ceil(2) * h * u64::from(bytes),
+            Layout::Tiles { width, height, bytes } => {
+                w.div_ceil(u64::from(width)) * h.div_ceil(u64::from(height)) * u64::from(bytes)
+            }
+            Layout::Unknown => 0,
         }
     }
 }
@@ -71,7 +80,7 @@ impl PixelFormat {
     }
 
     pub fn is_block_compressed(&self) -> bool {
-        matches!(self.layout, Layout::Block { .. })
+        matches!(self.layout, Layout::Block { .. } | Layout::Tiles { .. })
     }
 }
 

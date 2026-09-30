@@ -260,3 +260,25 @@ fn import_edits_from_an_extract_folder() {
     assert_eq!(edits[&2], texscan_gui::session::EditSource::Images([((0, 0), png)].into()));
     assert!(unchanged > 10);
 }
+
+#[test]
+fn a_ktx2_archive() {
+    let fixture = texscan_fixtures::ktx2_archive();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("k.bin");
+    std::fs::write(&path, &fixture.data).unwrap();
+    let mut h = harness();
+    h.state_mut().request(Action::OpenFile(path));
+    settle(&mut h);
+    h.get_by_label("9 textures");
+    h.get_by_label("2 rejected");
+    // Everything but the ASTC and Zstandard-supercompressed textures has a thumbnail.
+    wait_until(&mut h, "thumbnails", |app| !app.thumbnail_counts().2 && app.thumbnail_counts().0 > 0);
+    assert_eq!(h.state().thumbnail_counts(), (7, 2, false));
+    let cube = fixture.expected.iter().position(|e| e.spec.cube).unwrap() as u32;
+    h.state_mut().select(cube);
+    h.state_mut().sub.layer = 4;
+    h.run_steps(2);
+    h.get_by_label("KTX2");
+    wait_until(&mut h, "the +Z face", |app| app.shown_image() == Some((32, 32)));
+}

@@ -62,8 +62,8 @@ pub struct Scanned {
 /// Where a texture's new contents come from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditSource {
-    /// A replacement texture file of the same layout.
-    Dds(PathBuf),
+    /// A replacement texture file (DDS or KTX2) of the same layout.
+    File(PathBuf),
     /// New top-mip images (PNGs) by (layer, slice).
     Images(BTreeMap<(u32, u32), PathBuf>),
 }
@@ -72,7 +72,7 @@ impl EditSource {
     /// The files, for display.
     pub fn files(&self) -> Vec<&Path> {
         match self {
-            EditSource::Dds(p) => vec![p.as_path()],
+            EditSource::File(p) => vec![p.as_path()],
             EditSource::Images(m) => m.values().map(PathBuf::as_path).collect(),
         }
     }
@@ -179,10 +179,10 @@ impl Session {
         self.edits_generation += 1;
     }
 
-    /// Replace a whole texture with a `.dds` of the same layout.
-    pub fn set_dds_edit(&mut self, id: u32, path: PathBuf) {
+    /// Replace a whole texture with a texture file (DDS or KTX2) of the same layout.
+    pub fn set_file_edit(&mut self, id: u32, path: PathBuf) {
         self.info(format!("texture {id}: will be replaced by {}", path.display()));
-        self.edits.insert(id, EditSource::Dds(path));
+        self.edits.insert(id, EditSource::File(path));
         self.edits_changed();
     }
 
@@ -260,7 +260,7 @@ pub fn decode_image(data: &[u8], entry: &TextureEntry, info: &TextureInfo, sub: 
 /// Read an edit's files.
 pub fn read_edit(source: &EditSource) -> Result<TextureEdit> {
     Ok(match source {
-        EditSource::Dds(path) => TextureEdit::Texture(std::fs::read(path).with_context(|| path.display().to_string())?),
+        EditSource::File(path) => TextureEdit::Texture(std::fs::read(path).with_context(|| path.display().to_string())?),
         EditSource::Images(paths) => {
             let mut images = BTreeMap::new();
             for (&key, path) in paths {
@@ -309,7 +309,7 @@ pub fn import_edits(data: &[u8], manifest: &Manifest, dir: &Path) -> Result<(BTr
     for (&id, edit) in &found.edits {
         let entry = manifest.textures.iter().find(|t| t.id == id).expect("edits are of listed textures");
         let source = match edit {
-            TextureEdit::Texture(_) => EditSource::Dds(dir.join(&entry.file)),
+            TextureEdit::Texture(_) => EditSource::File(dir.join(&entry.file)),
             TextureEdit::Images(images) => {
                 let info = format_for(entry.format)
                     .parse(texture_bytes(data, entry)?)

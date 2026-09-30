@@ -13,14 +13,16 @@ use crate::pixel::PixelFormat;
 #[serde(rename_all = "lowercase")]
 pub enum Container {
     Dds,
+    Ktx2,
 }
 
 impl Container {
-    pub const ALL: [Container; 1] = [Container::Dds];
+    pub const ALL: [Container; 2] = [Container::Dds, Container::Ktx2];
 
     pub fn name(self) -> &'static str {
         match self {
             Container::Dds => "dds",
+            Container::Ktx2 => "ktx2",
         }
     }
 
@@ -28,7 +30,13 @@ impl Container {
     pub fn extension(self) -> &'static str {
         match self {
             Container::Dds => "dds",
+            Container::Ktx2 => "ktx2",
         }
+    }
+
+    /// The container a file starts with, by its magic bytes.
+    pub fn sniff(data: &[u8]) -> Option<Container> {
+        Container::ALL.into_iter().find(|&c| data.starts_with(format_for(c).magic()))
     }
 }
 
@@ -44,9 +52,22 @@ impl FromStr for Container {
     fn from_str(s: &str) -> Result<Self, String> {
         match s.to_ascii_lowercase().as_str() {
             "dds" => Ok(Container::Dds),
-            _ => Err(format!("unknown texture format {s:?} (known: dds)")),
+            "ktx2" => Ok(Container::Ktx2),
+            _ => Err(format!("unknown texture format {s:?} (known: dds, ktx2)")),
         }
     }
+}
+
+/// Where a texture's images are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Storage {
+    /// Right after the header, layer by layer, each layer with all its mips, each mip with
+    /// all its slices.
+    Dds,
+    /// A level index: (offset from the start of the texture, length) per mip. Within a
+    /// level: layers, then faces, then slices. `supercompression` is KTX2's scheme
+    /// (0 none, 1 BasisLZ, 2 Zstandard, 3 zlib); compressed levels can't be read yet.
+    Ktx2 { levels: Vec<(u64, u64)>, supercompression: u32 },
 }
 
 /// What a texture's header says, and so how big it is.
@@ -54,6 +75,7 @@ impl FromStr for Container {
 pub struct TextureInfo {
     /// The whole texture, header included.
     pub size: u64,
+    /// Bytes before the pixel data: header, and for KTX2 its indexes and metadata.
     pub header_size: u64,
     pub width: u32,
     pub height: u32,
@@ -66,6 +88,7 @@ pub struct TextureInfo {
     /// Faces per array element: 6 for a cube map (fewer for a partial legacy one), else 1.
     pub faces: u32,
     pub pixel_format: PixelFormat,
+    pub storage: Storage,
 }
 
 impl TextureInfo {
@@ -113,7 +136,13 @@ pub trait TextureFormat: Sync {
 pub fn format_for(container: Container) -> &'static dyn TextureFormat {
     match container {
         Container::Dds => &crate::formats::dds::Dds,
+        Container::Ktx2 => &crate::formats::ktx2::Ktx2,
     }
+}
+
+/// Little-endian u64 at `pos`; the caller has checked the length.
+pub(crate) fn u64_le(data: &[u8], pos: usize) -> u64 {
+    u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap())
 }
 
 /// Little-endian u32 at `pos`; the caller has checked the length.

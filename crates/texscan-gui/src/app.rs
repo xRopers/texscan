@@ -178,12 +178,15 @@ impl App {
         self.show_edited = true;
     }
 
-    fn replace_with_dds(&mut self, id: u32) {
-        let Some(path) = rfd::FileDialog::new().add_filter("DDS", &["dds"]).set_title(format!("Replacement for texture {id}")).pick_file()
+    fn replace_with_file(&mut self, id: u32) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Texture", &["dds", "ktx2"])
+            .set_title(format!("Replacement for texture {id}"))
+            .pick_file()
         else {
             return;
         };
-        self.session.set_dds_edit(id, path);
+        self.session.set_file_edit(id, path);
         self.show_edited = true;
     }
 
@@ -261,9 +264,10 @@ impl App {
         }
     }
 
-    fn save_dds(&mut self, id: u32) {
+    fn save_file(&mut self, id: u32) {
         let (Some(file), Some((entry, _))) = (&self.session.file, self.session.texture(id)) else { return };
-        let Some(path) = rfd::FileDialog::new().add_filter("DDS", &["dds"]).set_file_name(&entry.file).save_file() else {
+        let ext = entry.format.extension();
+        let Some(path) = rfd::FileDialog::new().add_filter(ext.to_uppercase(), &[ext]).set_file_name(&entry.file).save_file() else {
             return;
         };
         let (data, entry) = (file.data.clone(), entry.clone());
@@ -444,11 +448,11 @@ impl App {
             }
         });
         ui.menu_button("Textures", |ui| {
-            if ui.add_enabled(has_textures && !busy, egui::Button::new("Extract all as DDS…")).clicked() {
+            if ui.add_enabled(has_textures && !busy, egui::Button::new("Extract all…")).clicked() {
                 ui.close();
                 self.extract_all(false);
             }
-            if ui.add_enabled(has_textures && !busy, egui::Button::new("Extract all as DDS and PNG…")).clicked() {
+            if ui.add_enabled(has_textures && !busy, egui::Button::new("Extract all, with PNGs…")).clicked() {
                 ui.close();
                 self.extract_all(true);
             }
@@ -466,9 +470,9 @@ impl App {
             ui.separator();
             match self.selected {
                 Some(id) => {
-                    if ui.add_enabled(!busy, egui::Button::new(format!("Save texture {id} as DDS…"))).clicked() {
+                    if ui.add_enabled(!busy, egui::Button::new(format!("Save texture {id}…"))).clicked() {
                         ui.close();
-                        self.save_dds(id);
+                        self.save_file(id);
                     }
                     if ui.add_enabled(!busy, egui::Button::new("Save shown image as PNG…")).clicked() {
                         ui.close();
@@ -479,9 +483,9 @@ impl App {
                         ui.close();
                         self.replace_with_png(id);
                     }
-                    if ui.button("Replace texture with DDS…").clicked() {
+                    if ui.button("Replace texture with DDS/KTX2…").clicked() {
                         ui.close();
-                        self.replace_with_dds(id);
+                        self.replace_with_file(id);
                     }
                     if ui.add_enabled(self.session.edits.contains_key(&id), egui::Button::new("Revert")).clicked() {
                         ui.close();
@@ -809,13 +813,13 @@ impl App {
 
     fn run_menu_action(&mut self, action: Option<(u32, MenuAction)>) {
         match action {
-            Some((id, MenuAction::SaveDds)) => self.save_dds(id),
+            Some((id, MenuAction::SaveFile)) => self.save_file(id),
             Some((id, MenuAction::SavePng)) => self.save_png(id, Subresource::default()),
             Some((id, MenuAction::ReplacePng)) => {
                 self.select(id);
                 self.replace_with_png(id);
             }
-            Some((id, MenuAction::ReplaceDds)) => self.replace_with_dds(id),
+            Some((id, MenuAction::ReplaceFile)) => self.replace_with_file(id),
             Some((id, MenuAction::Revert)) => self.session.revert(id),
             None => {}
         }
@@ -848,6 +852,9 @@ impl App {
             ui.label("Dimensions");
             ui.label(format!("{}, {} mip{}", dimensions(&entry), entry.mips, if entry.mips == 1 { "" } else { "s" }));
             ui.end_row();
+            ui.label("Container");
+            ui.label(entry.format.name().to_uppercase());
+            ui.end_row();
             ui.label("Pixel format");
             ui.label(match entry.dxgi_format {
                 Some(n) => format!("{} (DXGI {n})", entry.pixel_format),
@@ -861,8 +868,8 @@ impl App {
         let edit = self.session.edits.get(&id).cloned();
         ui.horizontal(|ui| {
             let busy = self.jobs.busy();
-            if ui.add_enabled(!busy, egui::Button::new("Save as DDS…")).clicked() {
-                self.save_dds(id);
+            if ui.add_enabled(!busy, egui::Button::new(format!("Save as .{}…", entry.format.extension()))).clicked() {
+                self.save_file(id);
             }
             if ui.add_enabled(!busy, egui::Button::new("Save image as PNG…")).clicked() {
                 self.save_png(id, self.sub);
@@ -873,8 +880,8 @@ impl App {
             if ui.button("Replace with PNG…").on_hover_text(format!("Replace the {what} shown below; its mips are rebuilt. Or drop a PNG on the window")).clicked() {
                 self.replace_with_png(id);
             }
-            if ui.button("Replace with DDS…").on_hover_text("A .dds with the same dimensions, mips and pixel format").clicked() {
-                self.replace_with_dds(id);
+            if ui.button("Replace with DDS/KTX2…").on_hover_text("A .dds or .ktx2 with the same dimensions, mips and pixel format").clicked() {
+                self.replace_with_file(id);
             }
             if ui.add_enabled(edit.is_some(), egui::Button::new("Revert")).clicked() {
                 self.session.revert(id);
@@ -1027,14 +1034,14 @@ impl App {
         egui::Window::new("Pack").open(&mut open).default_size([620.0, 360.0]).show(&self.ctx.clone(), |ui| {
             let busy = self.jobs.busy();
             if self.session.edits.is_empty() {
-                ui.label("No edits yet. Replace a texture's image with a PNG, or the whole texture with a DDS, from the details pane or the Textures menu; or import a folder of edits written by Extract.");
+                ui.label("No edits yet. Replace a texture's image with a PNG, or the whole texture with a DDS or KTX2 file, from the details pane or the Textures menu; or import a folder of edits written by Extract.");
             } else {
                 ui.label(format!("{} edited texture(s):", self.session.edits.len()));
                 egui::Grid::new("pack-edits").striped(true).num_columns(2).spacing([12.0, 3.0]).show(ui, |ui| {
                     for (id, edit) in &self.session.edits {
                         ui.label(format!("texture {id}"));
                         ui.label(match edit {
-                            EditSource::Dds(p) => format!("DDS {}", p.display()),
+                            EditSource::File(p) => format!("texture file {}", p.display()),
                             EditSource::Images(m) => format!("{} image(s): {}", m.len(), m.values().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")),
                         });
                         ui.end_row();
@@ -1064,7 +1071,7 @@ impl App {
                         ui.label(t.id.to_string());
                         ui.monospace(format!("{:#x}", t.offset));
                         ui.label(match &t.outcome {
-                            Outcome::Replaced => "pixel data replaced from the DDS".to_string(),
+                            Outcome::Replaced => "pixel data replaced from the texture file".to_string(),
                             Outcome::Reencoded { images, mips } => format!("{images} image(s) encoded, {mips} mip(s) each"),
                             Outcome::Unchanged => "unchanged (same bytes as the original)".to_string(),
                         });
@@ -1181,10 +1188,10 @@ impl eframe::App for App {
 
 #[derive(Debug, Clone, Copy)]
 enum MenuAction {
-    SaveDds,
+    SaveFile,
     SavePng,
     ReplacePng,
-    ReplaceDds,
+    ReplaceFile,
     Revert,
 }
 
@@ -1195,11 +1202,11 @@ fn texture_menu(ui: &mut Ui, id: u32, edited: bool, action: &mut Option<(u32, Me
             ui.close();
         }
     };
-    item(ui, true, "Save as DDS…", MenuAction::SaveDds);
+    item(ui, true, "Save texture file…", MenuAction::SaveFile);
     item(ui, true, "Save as PNG…", MenuAction::SavePng);
     ui.separator();
     item(ui, true, "Replace with PNG…", MenuAction::ReplacePng);
-    item(ui, true, "Replace with DDS…", MenuAction::ReplaceDds);
+    item(ui, true, "Replace with DDS/KTX2…", MenuAction::ReplaceFile);
     item(ui, edited, "Revert", MenuAction::Revert);
 }
 

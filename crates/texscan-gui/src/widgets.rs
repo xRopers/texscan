@@ -7,7 +7,7 @@ use texscan_core::{Rejected, TextureEntry};
 /// Colour for a texture by its kind of pixel format.
 pub fn texture_color(entry: &TextureEntry) -> Color32 {
     let f = entry.pixel_format.as_str();
-    let block = f.starts_with("BC") || f.starts_with("DXT") || f.starts_with("ATI") || f == "RXGB";
+    let block = ["BC", "DXT", "ATI", "ETC", "EAC", "ASTC"].iter().any(|p| f.starts_with(p)) || f == "RXGB";
     if block {
         Color32::from_rgb(90, 160, 255)
     } else if f.contains("FLOAT") || f.ends_with('F') || f.contains("16") || f.contains("32") {

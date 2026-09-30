@@ -249,6 +249,7 @@ mod tests {
             array_size: 1,
             faces: 1,
             pixel_format: pf,
+            storage: crate::format::Storage::Dds,
         }
     }
 

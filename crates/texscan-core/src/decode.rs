@@ -12,7 +12,7 @@
 
 use std::ops::Range;
 
-use crate::format::TextureInfo;
+use crate::format::{Storage, TextureInfo};
 use crate::pixel::{Decode, Layout};
 
 /// An 8-bit RGBA image, rows top to bottom.
@@ -53,8 +53,7 @@ impl TextureInfo {
         ((self.width >> mip).max(1), (self.height >> mip).max(1), (self.depth >> mip).max(1))
     }
 
-    /// Where an image's bytes are, relative to the start of the texture. Images are
-    /// stored layer by layer, each with all its mips, each mip with all its slices.
+    /// Where an image's bytes are, relative to the start of the texture (see [`Storage`]).
     pub fn subresource_range(&self, sub: Subresource) -> Result<Range<usize>, DecodeError> {
         let out = |what: &str, value: u32, count: u32| {
             DecodeError::OutOfRange(format!("{what} {value} doesn't exist (the texture has {count})"))
@@ -74,6 +73,23 @@ impl TextureInfo {
             let (w, h, _) = self.mip_size(mip);
             layout.image_size(w, h)
         };
+        if let Storage::Ktx2 { levels, supercompression } = &self.storage {
+            if *supercompression != 0 {
+                return Err(DecodeError::Unsupported(match supercompression {
+                    1 => "BasisLZ-supercompressed KTX2",
+                    2 => "Zstandard-supercompressed KTX2",
+                    3 => "zlib-supercompressed KTX2",
+                    _ => "supercompressed KTX2",
+                }));
+            }
+            let (offset, length) = levels[sub.mip as usize];
+            let start = offset + (u64::from(sub.layer) * u64::from(depth) + u64::from(sub.slice)) * image(sub.mip);
+            let end = start + image(sub.mip);
+            if end > offset + length {
+                return Err(DecodeError::Short);
+            }
+            return Ok(start as usize..end as usize);
+        }
         let per_layer: u64 = (0..self.mips).map(|m| image(m) * u64::from(self.mip_size(m).2)).sum();
         let before_mip: u64 = (0..sub.mip).map(|m| image(m) * u64::from(self.mip_size(m).2)).sum();
         let start =
@@ -442,6 +458,7 @@ mod tests {
             array_size: 1,
             faces: 1,
             pixel_format: pf,
+            storage: crate::format::Storage::Dds,
         }
     }
 

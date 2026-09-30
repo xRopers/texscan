@@ -56,8 +56,8 @@ enum Command {
         filters: ScanArgs,
     },
     /// Put edited textures from an extract folder back into a copy of the input. Edit a
-    /// texture's PNG (same size; mips are regenerated) or replace its .dds with one of
-    /// the same dimensions, mips and pixel format. Textures keep their size, so nothing
+    /// texture's PNG (same size; mips are regenerated) or replace its .dds/.ktx2 with a
+    /// DDS or KTX2 file of the same dimensions, mips and pixel format. Textures keep their size, so nothing
     /// else in the file moves
     Pack {
         file: PathBuf,
@@ -81,7 +81,7 @@ enum Command {
 
 #[derive(Args)]
 struct ScanArgs {
-    /// Formats to look for, comma separated [default: all (dds)]
+    /// Formats to look for, comma separated [default: all: dds, ktx2]
     #[arg(long, value_delimiter = ',', default_values_t = Container::ALL.to_vec(), hide_default_value = true)]
     formats: Vec<Container>,
 }
@@ -203,7 +203,7 @@ fn run(cli: Cli) -> Result<()> {
             } else {
                 for t in &result.textures {
                     let what = match &t.outcome {
-                        Outcome::Replaced => "replaced from the .dds".to_string(),
+                        Outcome::Replaced => "replaced from the texture file".to_string(),
                         Outcome::Reencoded { images, mips } => format!("{images} image(s) encoded, {mips} mip(s) each"),
                         Outcome::Unchanged => "unchanged (the edit gives the same bytes)".to_string(),
                     };

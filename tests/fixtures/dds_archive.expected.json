@@ -15,6 +15,7 @@
     {
       "array_size": 1,
       "crc32": "8a62daef",
+      "decodable": true,
       "depth": 1,
       "dxgi_format": 71,
       "faces": 1,
@@ -29,6 +30,7 @@
     {
       "array_size": 1,
       "crc32": "fb75f361",
+      "decodable": true,
       "depth": 1,
       "dxgi_format": 77,
       "faces": 1,
@@ -43,6 +45,7 @@
     {
       "array_size": 1,
       "crc32": "c20b6635",
+      "decodable": true,
       "depth": 1,
       "dxgi_format": 87,
       "faces": 1,
@@ -57,6 +60,7 @@
     {
       "array_size": 1,
       "crc32": "01ef89a1",
+      "decodable": true,
       "depth": 1,
       "dxgi_format": 99,
       "faces": 1,
@@ -71,6 +75,7 @@
     {
       "array_size": 1,
       "crc32": "b96f2329",
+      "decodable": true,
       "depth": 1,
       "dxgi_format": 71,
       "faces": 6,
@@ -85,6 +90,7 @@
     {
       "array_size": 1,
       "crc32": "c005363d",
+      "decodable": true,
       "depth": 1,
       "dxgi_format": 85,
       "faces": 6,
@@ -99,6 +105,7 @@
     {
       "array_size": 1,
       "crc32": "63cf66ab",
+      "decodable": true,
       "depth": 8,
       "dxgi_format": 61,
       "faces": 1,
@@ -113,6 +120,7 @@
     {
       "array_size": 1,
       "crc32": "fbe1d846",
+      "decodable": true,
       "depth": 1,
       "dxgi_format": 10,
       "faces": 1,
@@ -127,6 +135,7 @@
     {
       "array_size": 1,
       "crc32": "924f7425",
+      "decodable": true,
       "depth": 1,
       "dxgi_format": 77,
       "faces": 1,
@@ -141,6 +150,7 @@
     {
       "array_size": 1,
       "crc32": "2c5e8b56",
+      "decodable": true,
       "depth": 1,
       "dxgi_format": 83,
       "faces": 1,
@@ -155,6 +165,7 @@
     {
       "array_size": 3,
       "crc32": "95a67366",
+      "decodable": true,
       "depth": 1,
       "dxgi_format": 98,
       "faces": 1,

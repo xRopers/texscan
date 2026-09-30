@@ -2,18 +2,18 @@
 
 Find textures inside any binary file and extract them.
 
-Many games keep standard DDS textures, headers and all, inside their own archive formats. texscan finds them by their headers, works out each texture's exact size from its dimensions, mip levels and pixel format, and writes them out as ordinary `.dds` files. No engine-specific tool needed.
+Many games keep standard DDS and KTX2 textures, headers and all, inside their own archive formats. texscan finds them by their headers, works out each texture's exact size from its dimensions, mip levels and pixel format, and writes them out as ordinary `.dds` and `.ktx2` files. No engine-specific tool needed.
 
 It's a sibling of [zscan](https://github.com/xRopers/zscan), which does the same for compressed streams, and works the same way: a scan writes a JSON manifest, and later steps work from it.
 
-- **Scan** a file for DDS textures, with their exact sizes, dimensions, mips and pixel formats.
+- **Scan** a file for DDS and KTX2 textures, with their exact sizes, dimensions, mips and pixel formats.
 - **Extract** them as `.dds` files, or export them as PNG.
-- **Pack** edited textures back into a copy of the file, like packzip: edit the PNG (texscan re-encodes it and rebuilds the mips) or drop in a new `.dds`.
+- **Pack** edited textures back into a copy of the file, like packzip: edit the PNG (texscan re-encodes it and rebuilds the mips) or drop in a new `.dds` or `.ktx2`.
 - **Browse** them in a desktop app: thumbnails, a sortable table, and a preview with mip, face, slice and channel controls.
 
 ![texscan's desktop app: thumbnails of every texture in an archive, with a brick texture open in the preview](docs/images/texscan-gui-grid.png)
 
-**Status: early.** More formats (KTX, PNG and others) are next.
+**Status: early.** More formats (KTX1, PNG and others) and ETC/ASTC decoding are next.
 
 ## Build
 
@@ -52,13 +52,13 @@ Every command takes `--json`. The input is never modified. `extract` refuses a f
 `pack` looks through the extract folder for textures you changed:
 
 - **An edited PNG** (same size as the texture). texscan encodes it in the texture's pixel format, BC1–BC7 included, and rebuilds its mip levels from it. PNGs you didn't touch are recognised and left alone, so you can export everything and edit one.
-- **A replacement `.dds`** with the same dimensions, mip count, faces, array size and pixel format (a DX10 or legacy header both work). Its pixel data is used as is.
+- **A replacement `.dds` or `.ktx2`** with the same dimensions, mip count, faces, array size and pixel format. Either container can replace either (a DDS for a KTX2 texture, say), and a DX10 or legacy DDS header both work. Its pixel data is used as is.
 
 Textures keep their exact size and their original header, so nothing else in the file moves and no offsets need fixing. The input is never modified: pack writes a new file (`game.packed.pak` by default), reads it back and checks every changed texture before putting it in place.
 
 Some things can't be written back yet: signed BC4/BC5/BC6H, 4:2:2 video formats, R11G11B10 and R9G9B9E5. A palettized texture can only take colours already in its palette. PNGs are 8-bit, so an HDR texture edited as PNG loses values above 1; replace its `.dds` instead. BC1 is written opaque.
 
-`--show-rejected` lists headers that look like DDS but can't be used, and why (for example an unknown pixel format, or a texture cut off by the end of the file).
+`--show-rejected` lists headers that look like textures but can't be used, and why (for example an unknown pixel format, or a texture cut off by the end of the file).
 
 ## Desktop app
 
@@ -73,7 +73,7 @@ Open a file (or drop one on the window) and it's scanned straight away. Every te
 - fit to the pane, or zoom with the slider or Ctrl + mouse wheel; hover to read a pixel's value;
 - save it as `.dds`, or the image shown as PNG.
 
-To edit, use **Replace with PNG…** (or drop a PNG on the window) for the image shown, or **Replace with DDS…** for the whole texture. The preview's **Edited** view shows the texture exactly as it will be written, encoded in its own pixel format; **Original** shows what's in the file. **Textures > Import edits from folder…** picks up everything you changed in a folder written by Extract. Then **Pack…**: a dry run lists what will change, and **Write packed file…** writes a new file and checks it.
+To edit, use **Replace with PNG…** (or drop a PNG on the window) for the image shown, or **Replace with DDS/KTX2…** for the whole texture. The preview's **Edited** view shows the texture exactly as it will be written, encoded in its own pixel format; **Original** shows what's in the file. **Textures > Import edits from folder…** picks up everything you changed in a folder written by Extract. Then **Pack…**: a dry run lists what will change, and **Write packed file…** writes a new file and checks it.
 
 ![A brick texture replaced with an edited PNG, previewed as it will be written, and the Pack window's dry run](docs/images/texscan-gui-pack.png)
 
@@ -85,7 +85,9 @@ The strip along the top shows where each texture sits in the file (blue: block-c
 
 The screenshots use made-up textures from `docs/make_demo.py`.
 
-## DDS support
+## Formats
+
+### DDS
 
 - Legacy headers: DXT1–5, ATI1/ATI2, BC4/BC5, RXGB, RGB, luminance, alpha, bump-map, palettized (P4/P8) and D3D9 float formats.
 - DX10 headers: every DXGI format except planar video formats (NV12 and similar).
@@ -96,6 +98,15 @@ Checked against 123 real DDS files covering most legacy formats: each one's size
 Every format above can be exported to PNG except CxV8U8, planar video formats, depth-stencil formats and most typeless formats.
 
 Textures stored without a header can't be found this way. That includes Unity's Texture2D and Unreal's `.uasset`/`.ubulk`, which keep raw pixel data. A later version will let you describe them by hand.
+
+### KTX2
+
+- Every KTX2 layout: mipmaps, cube maps, arrays and volume textures, with the level index read as written (usually smallest mip first).
+- Vulkan formats map to the same decoders and encoders as DDS: BC1–BC7 and the uncompressed formats preview, export and pack.
+- ETC2, EAC and ASTC textures are found and extracted with their exact size, but can't be previewed, exported as PNG or edited as PNG yet. You can still replace them with a `.ktx2` of the same format.
+- Supercompressed textures (Basis Universal, Zstandard, zlib) are found and extracted using their level index, but can't be decoded or packed yet.
+
+Texture names in the list are Vulkan's without the `VK_FORMAT_` prefix (`BC7_SRGB_BLOCK`), with the matching DXGI format alongside.
 
 ## License
 
