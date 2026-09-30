@@ -12,6 +12,8 @@ rust-version = "1.89"
 texscan-core = { path = "crates/texscan-core" }
 texscan-fixtures = { path = "crates/texscan-fixtures" }
 anyhow = "1"
+# Apache-2.0 only: binaries that include it are effectively GPL-3 (see README, License).
+basisu = "0.1"
 bcdec_rs = "0.2"
 block_compression = { version = "0.10", default-features = false, features = ["bc15", "bc6h", "bc7"] }
 clap = { version = "4", features = ["derive"] }

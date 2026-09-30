@@ -71,6 +71,9 @@ pub enum Decode {
     Etc(Etc),
     /// ASTC blocks of the layout's tile size. HDR blocks are clamped to 0–1.
     Astc,
+    /// Basis Universal (ETC1S, UASTC, XUASTC; KTX2 with `vkFormat` 0), transcoded from
+    /// the whole texture by `basisu`. HDR sources are clamped to 0–1.
+    Basis,
     /// 4:2:2 YUV with the byte order U, Y0, V, Y1 (no DXGI equivalent).
     Uyvy,
     /// Not decodable yet.

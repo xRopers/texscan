@@ -49,6 +49,8 @@ pub enum DecodeError {
     Decompress { mip: u32, reason: String },
     #[error("the {0} data is invalid")]
     Corrupt(&'static str),
+    #[error("Basis Universal: {0}")]
+    Basis(String),
 }
 
 /// What a KTX2 supercompression scheme is called.
@@ -156,6 +158,9 @@ pub fn image_bytes<'a>(texture: &'a [u8], info: &TextureInfo, sub: Subresource) 
 
 /// Decode one image. `texture` starts at the texture's first header byte.
 pub fn decode(texture: &[u8], info: &TextureInfo, sub: Subresource) -> Result<Image, DecodeError> {
+    if info.pixel_format.decode == Decode::Basis {
+        return Ok(basis(texture, info, sub)?.oriented(info.orientation));
+    }
     let bytes = image_bytes(texture, info, sub)?;
     let data = &bytes[..];
     let (width, height, _) = info.mip_size(sub.mip);
@@ -207,7 +212,8 @@ pub fn decode(texture: &[u8], info: &TextureInfo, sub: Subresource) -> Result<Im
             let palette = texture.get(start..start + (4 << bits)).ok_or(DecodeError::Short)?;
             palettized(data, w, h, bits, palette)
         }
-        Decode::None => return Err(unsupported()),
+        // Basis is transcoded from the whole texture, above.
+        Decode::Basis | Decode::None => return Err(unsupported()),
     };
     Ok(Image { width, height, rgba }.oriented(info.orientation))
 }
@@ -232,6 +238,37 @@ impl Image {
         }
         self
     }
+}
+
+/// Transcode one image of a Basis Universal texture to RGBA with `basisu`: 8-bit for LDR
+/// sources, half floats (clamped to 0–1) for HDR ones. A panic in the transcoder becomes
+/// an error.
+fn basis(texture: &[u8], info: &TextureInfo, sub: Subresource) -> Result<Image, DecodeError> {
+    use basisu::{DecodeFlags, TargetFormat, Transcoder};
+    if sub.layer >= info.layers() || sub.mip >= info.mips || sub.slice > 0 {
+        return Err(DecodeError::OutOfRange(format!("{sub:?} doesn't exist")));
+    }
+    let (width, height, _) = info.mip_size(sub.mip);
+    let whole = texture.get(..info.size as usize).ok_or(DecodeError::Short)?;
+    let (element, face) = (sub.layer / info.faces, sub.layer % info.faces);
+    let run = || -> Result<Vec<u8>, String> {
+        let t = Transcoder::new(whole).map_err(|e| format!("{e:?}"))?;
+        let transcode = |target| t.transcode_image(sub.mip, element, face, target, DecodeFlags::NONE).map_err(|e| format!("{e:?}"));
+        if t.supports(TargetFormat::Rgba32) {
+            return transcode(TargetFormat::Rgba32);
+        }
+        let halves = transcode(TargetFormat::RgbaHalf)?;
+        Ok(halves.as_chunks::<2>().0.iter().map(|h| float_to_u8(half_to_f32(u16::from_le_bytes(*h)))).collect())
+    };
+    let rgba = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
+        Ok(Ok(rgba)) => rgba,
+        Ok(Err(reason)) => return Err(DecodeError::Basis(reason)),
+        Err(_) => return Err(DecodeError::Corrupt("Basis Universal")),
+    };
+    if rgba.len() != (width * height * 4) as usize {
+        return Err(DecodeError::Basis(format!("{} bytes for a {width}x{height} image", rgba.len())));
+    }
+    Ok(Image { width, height, rgba })
 }
 
 type T2dDecoder = fn(&[u8], usize, usize, &mut [u32]) -> Result<(), &'static str>;

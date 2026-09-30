@@ -49,7 +49,7 @@ pub fn encode(image: &Image, pf: &PixelFormat, palette: Option<&[u8]>) -> Result
             palettized(image, bits, palette.ok_or_else(unsupported)?)
         }
         Decode::Channels(spec) => Ok(by_channels(image, &parse_channels(spec).ok_or_else(unsupported)?)),
-        Decode::Etc(_) | Decode::Astc | Decode::Uyvy | Decode::None => Err(unsupported()),
+        Decode::Etc(_) | Decode::Astc | Decode::Basis | Decode::Uyvy | Decode::None => Err(unsupported()),
     }
 }
 

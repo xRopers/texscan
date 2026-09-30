@@ -10,7 +10,8 @@
 //! `texture2ddecoder`) but can't be written; ASTC HDR isn't decoded. Zstandard and zlib supercompressed levels
 //! are decompressed to decode them, but can't be written either; BasisLZ and newer
 //! schemes (such as Basis Universal's UASTC HDR 6x6 intermediate) are sized from the
-//! level index alone.
+//! level index alone, and Basis Universal textures (`vkFormat` 0: ETC1S, UASTC,
+//! XUASTC) are transcoded by `basisu` to decode them.
 //!
 //! Checked against the Khronos KTX-Software test files: every one parses to exactly its
 //! own length.
@@ -121,6 +122,15 @@ pub fn parse(data: &[u8]) -> Result<TextureInfo, Reject> {
         levels.push(Ktx2Level { offset, length, uncompressed });
     }
     let header_size = levels.iter().filter(|l| l.length > 0).map(|l| l.offset).min().unwrap_or(index_end as u64);
+    // Basis Universal says what it holds in its data format descriptor; basisu reads it.
+    // It also transcodes the ASTC HDR 4x4 and 6x6 blocks its encoder writes, which
+    // texture2ddecoder gets wrong, so those go to it too when it accepts them.
+    let astc_hdr = (1_000_066_000..=1_000_066_013).contains(&vk_format);
+    let pixel_format = match (vk_format, astc_hdr) {
+        (0, _) => basis_format(&data[..end as usize]).unwrap_or(pixel_format),
+        (_, true) if basis_format(&data[..end as usize]).is_some() => pixel_format.with_decode(Decode::Basis),
+        _ => pixel_format,
+    };
     let (kvd_at, kvd_len) = (field(56) as usize, field(60) as usize);
     let orientation = orientation(&data[kvd_at..kvd_at + kvd_len]);
     Ok(TextureInfo {
@@ -152,6 +162,24 @@ fn orientation(kvd: &[u8]) -> Orientation {
         rest = rest.get((4 + len).next_multiple_of(4)..).unwrap_or(&[]);
     }
     Orientation::default()
+}
+
+/// The pixel format of a Basis Universal texture, named by what it holds, or `None` if
+/// basisu can't open it (it stays "UNDEFINED" and doesn't decode).
+fn basis_format(texture: &[u8]) -> Option<PixelFormat> {
+    use basisu::SourceFormat as S;
+    let source = std::panic::catch_unwind(|| basisu::Transcoder::new(texture).map(|t| t.source_format())).ok()?.ok()?;
+    let name = match source {
+        S::Etc1s => "Basis ETC1S",
+        S::UastcLdr => "UASTC 4x4",
+        S::UastcHdr4x4 => "UASTC HDR 4x4",
+        S::UastcHdr6x6 => "UASTC HDR 6x6",
+        S::AstcHdr6x6 => "ASTC HDR 6x6 (Basis)",
+        S::AstcLdr(_) => "ASTC LDR (Basis)",
+        S::XuastcLdr(_) => "XUASTC LDR",
+        _ => "Basis Universal",
+    };
+    Some(PixelFormat::new(name, None, Layout::Unknown).with_decode(Decode::Basis))
 }
 
 /// ASTC HDR (`VK_EXT_texture_compression_astc_hdr`): 1000066000 + i for the i-th size.
@@ -315,8 +343,9 @@ pub fn vk_format_info(vk: u32, supercompression: u32) -> PixelFormat {
             let (w, h, unorm, srgb) = ASTC[(vk - 157) as usize / 2];
             astc(if vk % 2 == 1 { unorm } else { srgb }, w, h)
         }
-        // Not decoded: texture2ddecoder's HDR path puts speckles of wrong colour in real
-        // files (mean error 23 against the same image stored as half floats).
+        // Not decoded by texture2ddecoder, whose HDR path puts speckles of wrong colour in
+        // real files (mean error 23 against the same image stored as half floats); parse
+        // hands them to basisu if it accepts them.
         1_000_066_000..=1_000_066_013 => {
             let i = (vk - 1_000_066_000) as usize;
             let (w, h, _, _) = ASTC[i];
@@ -410,6 +439,17 @@ mod tests {
         assert_eq!(orientation(&entry(b"KTXorientation\0ld\0")), Orientation { flip_x: true, flip_y: false });
         assert_eq!(orientation(&entry(b"KTXwriter\0x\0")), Orientation::default());
         assert_eq!(orientation(&[1, 2]), Orientation::default());
+    }
+
+    #[test]
+    fn basis_that_basisu_rejects_stays_undecoded() {
+        // vkFormat 0 with BasisLZ, but the level is junk: found and sized, not decodable.
+        let junk = build(0, 16, 16, 1, &[vec![0x5a; 40]], 1);
+        let info = parse(&junk).unwrap();
+        assert_eq!(info.pixel_format.name, "UNDEFINED (Basis Universal ETC1S)");
+        assert_eq!(info.pixel_format.decode, Decode::None);
+        let err = crate::decode::decode(&junk, &info, Default::default()).unwrap_err();
+        assert_eq!(err, crate::decode::DecodeError::Unsupported("BasisLZ-supercompressed KTX2"));
     }
 
     #[test]
