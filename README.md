@@ -15,6 +15,20 @@ It's a sibling of [zscan](https://github.com/xRopers/zscan), which does the same
 
 **Status: early.** More formats (KTX1, PNG and others) are next.
 
+## Why texscan over AssetStudio
+
+AssetStudio is the usual tool for hunting textures, but it's a Unity asset browser: it reads Unity's own files and exports what it finds. texscan works at a lower level and goes both ways:
+
+- **Any engine, any container.** texscan doesn't need to understand the archive. It finds DDS and KTX2 textures by their headers in whatever file they're stored in: custom pack formats, extracted blobs, memory dumps, other engines' asset files.
+- **Put textures back.** AssetStudio exports only. texscan packs edited textures into a copy of the file: edit the PNG and it's re-encoded in the texture's own format (BC1–BC7 included) with its mips rebuilt, or drop in a replacement `.dds`/`.ktx2`. The texture keeps its exact size, so nothing else in the file moves.
+- **Checked, and never destructive.** Every texture's size is worked out from its header and checked against the file. Pack writes a new file, reads it back and verifies every changed texture. The input is never modified.
+- **Scriptable.** A command line with `--json` output and a manifest, so a scan, extract and pack can run in a batch script or a build. AssetStudio is mainly a GUI.
+- **Modern formats.** KTX2 with Zstandard supercompression, ETC2/EAC, ASTC (including HDR) and Basis Universal (ETC1S, UASTC), as well as every DDS layout: legacy and DX10 headers, cube maps, volumes, arrays.
+- **Fast on big files.** It scans by memory-mapping the file and searching for headers, so a 1 GiB file takes under a second.
+- **Light.** One native program, no .NET runtime, nothing to install.
+
+When AssetStudio is the better choice: for Unity games it understands the asset files themselves, so it finds textures stored without a DDS or KTX2 header (Unity's Texture2D keeps raw pixel data), knows their names, and handles meshes, audio and other asset types. texscan can't find headerless textures yet. The two work well together: AssetStudio to explore a Unity game, texscan for everything else and for putting edits back.
+
 ## Download
 
 Windows x64 builds are on the [Releases](https://github.com/xRopers/texscan/releases) page. The zip holds `texscan.exe` (command line) and `texscan-gui.exe` (desktop app). Nothing to install: the C runtime is built in.
