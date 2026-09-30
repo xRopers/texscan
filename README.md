@@ -6,11 +6,17 @@ Many games keep standard DDS textures, headers and all, inside their own archive
 
 It's a sibling of [zscan](https://github.com/xRopers/zscan), which does the same for compressed streams, and works the same way: a scan writes a JSON manifest, and later steps work from it.
 
-**Status: early.** Scanning DDS textures, extracting them and exporting them as PNG work. Putting edited textures back (like packzip), more formats (KTX, PNG and others) and a desktop app are next.
+- **Scan** a file for DDS textures, with their exact sizes, dimensions, mips and pixel formats.
+- **Extract** them as `.dds` files, or export them as PNG.
+- **Browse** them in a desktop app: thumbnails, a sortable table, and a preview with mip, face, slice and channel controls.
+
+![texscan's desktop app: thumbnails of every texture in an archive, with a brick texture open in the preview](docs/images/texscan-gui-grid.png)
+
+**Status: early.** Putting edited textures back (like packzip) and more formats (KTX, PNG and others) are next.
 
 ## Build
 
-Rust 1.89 or later:
+Rust 1.95 or later (1.89 for the command line alone):
 
 ```bash
 cargo build --release
@@ -38,6 +44,27 @@ Every command takes `--json`. The input is never modified. `extract` refuses a f
 `--png` also saves each texture's full-size image as PNG: one file per array element, cube face (`_px`, `_nx`, `_py`, `_ny`, `_pz`, `_nz`) and volume slice. Colours are exported as stored: sRGB stays sRGB, HDR values are clipped to 0–1, and single-channel formats come out grey.
 
 `--show-rejected` lists headers that look like DDS but can't be used, and why (for example an unknown pixel format, or a texture cut off by the end of the file).
+
+## Desktop app
+
+```bash
+texscan-gui [FILE]
+```
+
+Open a file (or drop one on the window) and it's scanned straight away. Every texture shows as a thumbnail, or as a row in a sortable table; filter by pixel format, size or offset. Click one to preview it:
+
+- pick the mip level, cube face, array element or volume slice;
+- turn the R, G, B and A channels on and off (one channel on its own shows as grey);
+- fit to the pane, or zoom with the slider or Ctrl + mouse wheel; hover to read a pixel's value;
+- save it as `.dds`, or the image shown as PNG.
+
+The strip along the top shows where each texture sits in the file (blue: block-compressed, green: uncompressed, orange: high precision), with headers that couldn't be used marked in red. **Textures > Extract all** saves every texture at once.
+
+![A cube map's +Y face in the preview](docs/images/texscan-gui-cube.png)
+
+![The table view with a two-channel normal map selected](docs/images/texscan-gui-table.png)
+
+The screenshots use made-up textures from `docs/make_demo.py`.
 
 ## DDS support
 

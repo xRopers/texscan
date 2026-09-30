@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/texscan-core", "crates/texscan-cli", "crates/texscan-fixtures"]
+members = ["crates/texscan-core", "crates/texscan-cli", "crates/texscan-fixtures", "crates/texscan-gui"]
 
 [workspace.package]
 version = "0.1.0"

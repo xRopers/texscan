@@ -1,0 +1,26 @@
+[package]
+name = "texscan-gui"
+description = "Desktop front end for texscan-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# egui 0.36 needs 1.95; the core library and CLI build on the workspace MSRV.
+rust-version = "1.95"
+
+[[bin]]
+name = "texscan-gui"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+egui = "0.36"
+egui_extras = "0.36"
+rayon.workspace = true
+rfd = "0.17"
+texscan-core.workspace = true
+
+[dev-dependencies]
+egui_kittest = "0.36"
+tempfile.workspace = true
+texscan-fixtures.workspace = true
