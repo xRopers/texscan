@@ -66,8 +66,20 @@ pub enum Storage {
     Dds,
     /// A level index: (offset from the start of the texture, length) per mip. Within a
     /// level: layers, then faces, then slices. `supercompression` is KTX2's scheme
-    /// (0 none, 1 BasisLZ, 2 Zstandard, 3 zlib); compressed levels can't be read yet.
+    /// (0 none, 1 BasisLZ, 2 Zstandard, 3 zlib, others newer or vendor-defined);
+    /// compressed levels can't be read yet.
     Ktx2 { levels: Vec<(u64, u64)>, supercompression: u32 },
+}
+
+/// How rows and columns are stored, when not left to right and top to bottom (KTX2's
+/// `KTXorientation`). Decoded images are turned the right way round, and images being
+/// packed are turned back.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Orientation {
+    /// Columns stored right to left.
+    pub flip_x: bool,
+    /// Rows stored bottom to top.
+    pub flip_y: bool,
 }
 
 /// What a texture's header says, and so how big it is.
@@ -89,6 +101,7 @@ pub struct TextureInfo {
     pub faces: u32,
     pub pixel_format: PixelFormat,
     pub storage: Storage,
+    pub orientation: Orientation,
 }
 
 impl TextureInfo {

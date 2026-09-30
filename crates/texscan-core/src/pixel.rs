@@ -62,6 +62,9 @@ pub enum Decode {
     /// Indices into a palette of four-byte RGBA entries stored `offset` bytes into the
     /// texture.
     Palette { offset: u32 },
+    /// Uncompressed channels named DXGI-style (`R16G16B16_FLOAT`), for formats with no
+    /// DXGI number.
+    Channels(&'static str),
     /// BC3 with red kept in the alpha channel (Doom 3 normal maps).
     Rxgb,
     /// 4:2:2 YUV with the byte order U, Y0, V, Y1 (no DXGI equivalent).

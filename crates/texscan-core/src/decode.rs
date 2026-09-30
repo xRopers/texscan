@@ -12,7 +12,7 @@
 
 use std::ops::Range;
 
-use crate::format::{Storage, TextureInfo};
+use crate::format::{Orientation, Storage, TextureInfo};
 use crate::pixel::{Decode, Layout};
 
 /// An 8-bit RGBA image, rows top to bottom.
@@ -79,7 +79,7 @@ impl TextureInfo {
                     1 => "BasisLZ-supercompressed KTX2",
                     2 => "Zstandard-supercompressed KTX2",
                     3 => "zlib-supercompressed KTX2",
-                    _ => "supercompressed KTX2",
+                    _ => "KTX2 with this supercompression scheme",
                 }));
             }
             let (offset, length) = levels[sub.mip as usize];
@@ -110,6 +110,7 @@ pub fn decode(texture: &[u8], info: &TextureInfo, sub: Subresource) -> Result<Im
     let rgba = match pf.decode {
         Decode::Dxgi => decode_dxgi(pf.dxgi.ok_or_else(unsupported)?, data, w, h)?,
         Decode::Uyvy => pairs(data, w, h, Pairs::Yuv { y: [1, 3], u: 0, v: 2, sample: 1 }),
+        Decode::Channels(spec) => by_channels(data, w * h, &parse_channels(spec).ok_or_else(unsupported)?),
         Decode::Rxgb => {
             let mut rgba = blocks(data, w, h, 16, Block::Rgba(bcdec_rs::bc3));
             for px in rgba.as_chunks_mut::<4>().0 {
@@ -130,7 +131,29 @@ pub fn decode(texture: &[u8], info: &TextureInfo, sub: Subresource) -> Result<Im
         }
         Decode::None => return Err(unsupported()),
     };
-    Ok(Image { width, height, rgba })
+    Ok(Image { width, height, rgba }.oriented(info.orientation))
+}
+
+impl Image {
+    /// Mirrored as `orientation` says: from stored to upright, or back (it's its own
+    /// inverse).
+    pub fn oriented(mut self, orientation: Orientation) -> Image {
+        let (w, h) = (self.width as usize, self.height as usize);
+        if orientation.flip_y {
+            let row = w * 4;
+            for y in 0..h / 2 {
+                let (top, bottom) = self.rgba.split_at_mut((h - 1 - y) * row);
+                top[y * row..(y + 1) * row].swap_with_slice(&mut bottom[..row]);
+            }
+        }
+        if orientation.flip_x {
+            for row in self.rgba.chunks_exact_mut(w * 4) {
+                let pixels = row.as_chunks_mut::<4>().0;
+                pixels.reverse();
+            }
+        }
+        self
+    }
 }
 
 /// A `bcdec_rs` block decoder and what it writes.
@@ -459,11 +482,22 @@ mod tests {
             faces: 1,
             pixel_format: pf,
             storage: crate::format::Storage::Dds,
+            orientation: Default::default(),
         }
     }
 
     fn one(data: &[u8], pf: PixelFormat) -> Vec<u8> {
         decode(data, &info(1, 1, pf), Subresource::default()).unwrap().rgba
+    }
+
+    #[test]
+    fn orientation_flips_rows_and_columns() {
+        let image = Image { width: 2, height: 2, rgba: (0..16).collect() };
+        let up = image.clone().oriented(Orientation { flip_x: false, flip_y: true });
+        assert_eq!(up.rgba, [8, 9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3, 4, 5, 6, 7]);
+        let left = image.clone().oriented(Orientation { flip_x: true, flip_y: false });
+        assert_eq!(left.rgba, [4, 5, 6, 7, 0, 1, 2, 3, 12, 13, 14, 15, 8, 9, 10, 11]);
+        assert_eq!(up.oriented(Orientation { flip_x: false, flip_y: true }), image);
     }
 
     #[test]

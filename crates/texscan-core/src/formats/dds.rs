@@ -163,6 +163,7 @@ pub fn parse(data: &[u8]) -> Result<TextureInfo, Reject> {
         faces,
         pixel_format,
         storage: Storage::Dds,
+        orientation: Default::default(),
     })
 }
 

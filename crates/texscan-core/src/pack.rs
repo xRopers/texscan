@@ -243,8 +243,10 @@ fn reencode(
         _ => None,
     };
     let mut out = original.to_vec();
+    // Images arrive upright (as decode gives them); turn them back to how they're stored.
     let mut put = |sub: Subresource, image: &Image| -> std::result::Result<(), String> {
-        let bytes = encode(image, &pf, palette).map_err(|e| e.to_string())?;
+        let stored = image.clone().oriented(info.orientation);
+        let bytes = encode(&stored, &pf, palette).map_err(|e| e.to_string())?;
         let range = info.subresource_range(sub).map_err(|e| e.to_string())?;
         out[range].copy_from_slice(&bytes);
         Ok(())

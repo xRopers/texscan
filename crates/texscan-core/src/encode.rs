@@ -48,6 +48,7 @@ pub fn encode(image: &Image, pf: &PixelFormat, palette: Option<&[u8]>) -> Result
             let Layout::Linear { bits } = pf.layout else { return Err(unsupported()) };
             palettized(image, bits, palette.ok_or_else(unsupported)?)
         }
+        Decode::Channels(spec) => Ok(by_channels(image, &parse_channels(spec).ok_or_else(unsupported)?)),
         Decode::Uyvy | Decode::None => Err(unsupported()),
     }
 }
@@ -250,6 +251,7 @@ mod tests {
             faces: 1,
             pixel_format: pf,
             storage: crate::format::Storage::Dds,
+            orientation: Default::default(),
         }
     }
 

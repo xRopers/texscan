@@ -105,6 +105,9 @@ Textures stored without a header can't be found this way. That includes Unity's 
 - Vulkan formats map to the same decoders and encoders as DDS: BC1–BC7 and the uncompressed formats preview, export and pack.
 - ETC2, EAC and ASTC textures are found and extracted with their exact size, but can't be previewed, exported as PNG or edited as PNG yet. You can still replace them with a `.ktx2` of the same format.
 - Supercompressed textures (Basis Universal, Zstandard, zlib) are found and extracted using their level index, but can't be decoded or packed yet.
+- `KTXorientation` is honoured: a texture stored bottom-up is shown and exported the right way up, and turned back when packed.
+
+Checked against the 50 KTX2 test files in Khronos's KTX-Software repository (BC, ETC2, ASTC including HDR, UASTC, Basis ETC1S, Zstandard, 3D, arrays, cube maps): every one is sized exactly, and the decodable ones export correctly and pack back.
 
 Texture names in the list are Vulkan's without the `VK_FORMAT_` prefix (`BC7_SRGB_BLOCK`), with the matching DXGI format alongside.
 

@@ -7,10 +7,14 @@
 //! Pixel formats are Vulkan `VkFormat` numbers, named here without the `VK_FORMAT_`
 //! prefix and mapped to the matching DXGI format where there is one, so BC and the common
 //! uncompressed formats decode and pack like DDS. ETC2, EAC and ASTC are sized and found
-//! but not decoded yet; neither are supercompressed levels (BasisLZ, Zstandard, zlib),
-//! whose size comes from the level index alone.
+//! but not decoded yet; neither are supercompressed levels (BasisLZ, Zstandard, zlib, or
+//! a newer scheme such as Basis Universal's UASTC HDR 6x6 intermediate), whose size
+//! comes from the level index alone.
+//!
+//! Checked against the Khronos KTX-Software test files: every one parses to exactly its
+//! own length.
 
-use crate::format::{Container, Reject, Storage, TextureFormat, TextureInfo, u32_le, u64_le};
+use crate::format::{Container, Orientation, Reject, Storage, TextureFormat, TextureInfo, u32_le, u64_le};
 use crate::pixel::{self, Decode, Layout, PixelFormat};
 
 pub struct Ktx2;
@@ -72,9 +76,6 @@ pub fn parse(data: &[u8]) -> Result<TextureInfo, Reject> {
     if mips > max_mips {
         return Err(bad(format!("{mips} mips, but {width}x{height}x{depth} has at most {max_mips}")));
     }
-    if supercompression > 3 {
-        return Err(bad(format!("unknown supercompression scheme {supercompression}")));
-    }
 
     let index_end = HEADER + mips as usize * LEVEL_ENTRY;
     if data.len() < index_end {
@@ -115,6 +116,8 @@ pub fn parse(data: &[u8]) -> Result<TextureInfo, Reject> {
         levels.push((offset, length));
     }
     let header_size = levels.iter().filter(|l| l.1 > 0).map(|l| l.0).min().unwrap_or(index_end as u64);
+    let (kvd_at, kvd_len) = (field(56) as usize, field(60) as usize);
+    let orientation = orientation(&data[kvd_at..kvd_at + kvd_len]);
     Ok(TextureInfo {
         size: end,
         header_size,
@@ -126,8 +129,43 @@ pub fn parse(data: &[u8]) -> Result<TextureInfo, Reject> {
         faces,
         pixel_format,
         storage: Storage::Ktx2 { levels, supercompression },
+        orientation,
     })
 }
+
+/// The `KTXorientation` entry of the key/value data: `r` or `l` for x, `d` or `u` for y
+/// (then `o` or `i` for z, which isn't used). Missing means `rd`, the usual way.
+fn orientation(kvd: &[u8]) -> Orientation {
+    let mut rest = kvd;
+    while rest.len() >= 4 {
+        let len = u32::from_le_bytes(rest[..4].try_into().unwrap()) as usize;
+        let Some(pair) = rest.get(4..4 + len) else { break };
+        if let Some(value) = pair.strip_prefix(b"KTXorientation\0") {
+            let value = value.split(|&b| b == 0).next().unwrap_or(&[]);
+            return Orientation { flip_x: value.first() == Some(&b'l'), flip_y: value.get(1) == Some(&b'u') };
+        }
+        rest = rest.get((4 + len).next_multiple_of(4)..).unwrap_or(&[]);
+    }
+    Orientation::default()
+}
+
+/// ASTC HDR (`VK_EXT_texture_compression_astc_hdr`): 1000066000 + i for the i-th size.
+const ASTC_HDR: [&str; 14] = [
+    "ASTC_4x4_SFLOAT_BLOCK",
+    "ASTC_5x4_SFLOAT_BLOCK",
+    "ASTC_5x5_SFLOAT_BLOCK",
+    "ASTC_6x5_SFLOAT_BLOCK",
+    "ASTC_6x6_SFLOAT_BLOCK",
+    "ASTC_8x5_SFLOAT_BLOCK",
+    "ASTC_8x6_SFLOAT_BLOCK",
+    "ASTC_8x8_SFLOAT_BLOCK",
+    "ASTC_10x5_SFLOAT_BLOCK",
+    "ASTC_10x6_SFLOAT_BLOCK",
+    "ASTC_10x8_SFLOAT_BLOCK",
+    "ASTC_10x10_SFLOAT_BLOCK",
+    "ASTC_12x10_SFLOAT_BLOCK",
+    "ASTC_12x12_SFLOAT_BLOCK",
+];
 
 const ASTC: [(u32, u32, &str, &str); 14] = [
     (4, 4, "ASTC_4x4_UNORM_BLOCK", "ASTC_4x4_SRGB_BLOCK"),
@@ -159,6 +197,9 @@ pub fn vk_format_info(vk: u32, supercompression: u32) -> PixelFormat {
         PixelFormat::new(name, None, Linear { bits }).with_decode(Decode::Masks { r, g, b, a, luminance: false, signed: 0 })
     };
     let opaque = |name: &'static str, layout: Layout| PixelFormat::new(name, None, layout);
+    let channels = |name: &'static str, bits: u32, spec: &'static str| {
+        PixelFormat::new(name, None, Linear { bits }).with_decode(Decode::Channels(spec))
+    };
     match vk {
         0 if supercompression == 1 => opaque("UNDEFINED (Basis Universal ETC1S)", Unknown),
         0 => opaque("UNDEFINED (see the data format descriptor)", Unknown),
@@ -209,6 +250,11 @@ pub fn vk_format_info(vk: u32, supercompression: u32) -> PixelFormat {
         81 => dxgi("R16G16_UINT", 36),
         82 => dxgi("R16G16_SINT", 38),
         83 => dxgi("R16G16_SFLOAT", 34),
+        84 => channels("R16G16B16_UNORM", 48, "R16G16B16_UNORM"),
+        85 => channels("R16G16B16_SNORM", 48, "R16G16B16_SNORM"),
+        88 => channels("R16G16B16_UINT", 48, "R16G16B16_UINT"),
+        89 => channels("R16G16B16_SINT", 48, "R16G16B16_SINT"),
+        90 => channels("R16G16B16_SFLOAT", 48, "R16G16B16_FLOAT"),
         91 => dxgi("R16G16B16A16_UNORM", 11),
         92 => dxgi("R16G16B16A16_SNORM", 13),
         95 => dxgi("R16G16B16A16_UINT", 12),
@@ -259,6 +305,11 @@ pub fn vk_format_info(vk: u32, supercompression: u32) -> PixelFormat {
         157..=184 => {
             let (w, h, unorm, srgb) = ASTC[(vk - 157) as usize / 2];
             opaque(if vk % 2 == 1 { unorm } else { srgb }, Tiles { width: w, height: h, bytes: 16 })
+        }
+        1_000_066_000..=1_000_066_013 => {
+            let i = (vk - 1_000_066_000) as usize;
+            let (w, h, _, _) = ASTC[i];
+            opaque(ASTC_HDR[i], Tiles { width: w, height: h, bytes: 16 })
         }
         _ => opaque("unknown VkFormat", Unknown),
     }
@@ -327,6 +378,24 @@ mod tests {
         // Supercompressed levels aren't checked against the format: their size is theirs.
         let zstd = build(145, 64, 64, 1, &[vec![9; 100]], 2);
         assert_eq!(parse(&zstd).unwrap().size, zstd.len() as u64);
+        // Newer schemes (4 is Basis Universal's UASTC HDR 6x6 intermediate) too.
+        let scheme4 = build(0, 64, 64, 1, &[vec![9; 100]], 4);
+        assert_eq!(parse(&scheme4).unwrap().size, scheme4.len() as u64);
+    }
+
+    #[test]
+    fn orientation_metadata() {
+        let entry = |text: &[u8]| {
+            let mut kv = (text.len() as u32).to_le_bytes().to_vec();
+            kv.extend_from_slice(text);
+            kv.resize(kv.len().next_multiple_of(4), 0);
+            kv
+        };
+        let kvd = [entry(b"KTXwriter\0test\0"), entry(b"KTXorientation\0ru\0")].concat();
+        assert_eq!(orientation(&kvd), Orientation { flip_x: false, flip_y: true });
+        assert_eq!(orientation(&entry(b"KTXorientation\0ld\0")), Orientation { flip_x: true, flip_y: false });
+        assert_eq!(orientation(&entry(b"KTXwriter\0x\0")), Orientation::default());
+        assert_eq!(orientation(&[1, 2]), Orientation::default());
     }
 
     #[test]
@@ -336,6 +405,8 @@ mod tests {
         assert_eq!(vk_format_info(168, 0).name, "ASTC_8x5_SRGB_BLOCK");
         assert_eq!(vk_format_info(184, 0).name, "ASTC_12x12_SRGB_BLOCK");
         assert_eq!(vk_format_info(0, 1).layout, Layout::Unknown);
+        assert_eq!(vk_format_info(1_000_066_004, 0).name, "ASTC_6x6_SFLOAT_BLOCK");
+        assert_eq!(vk_format_info(90, 0).layout, Layout::Linear { bits: 48 });
         assert_eq!(Layout::Tiles { width: 6, height: 6, bytes: 16 }.image_size(13, 7), 3 * 2 * 16);
     }
 }
