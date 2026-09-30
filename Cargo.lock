@@ -217,6 +217,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "block_compression"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1de43762f28cd97f3c60766636ac814838fd48390ff2a9162d9c9953b4c20182"
+dependencies = [
+ "bytemuck",
+ "half",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1070,6 +1080,7 @@ version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ea2d84b969582b4b1864a92dc5d27cd2b77b622a8d79306834f1be5ba20d84b"
 dependencies = [
+ "bytemuck",
  "cfg-if",
  "crunchy",
  "num-traits",
@@ -2517,6 +2528,7 @@ name = "texscan-core"
 version = "0.1.0"
 dependencies = [
  "bcdec_rs",
+ "block_compression",
  "crc32fast",
  "memchr",
  "memmap2",

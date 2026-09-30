@@ -200,7 +200,7 @@ fn decode_dxgi(id: u32, data: &[u8], w: usize, h: usize) -> Result<Vec<u8>, Deco
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Kind {
+pub(crate) enum Kind {
     Unorm,
     Snorm,
     Uint,
@@ -211,15 +211,15 @@ enum Kind {
 /// A channel of an uncompressed format: which RGBA slot it fills (`None` for X) and how
 /// many bits it has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Channel {
-    slot: Option<usize>,
-    bits: u32,
-    kind: Kind,
+pub(crate) struct Channel {
+    pub(crate) slot: Option<usize>,
+    pub(crate) bits: u32,
+    pub(crate) kind: Kind,
 }
 
 /// `R16G16B16A16_FLOAT` → four 16-bit float channels. `None` for names that don't
 /// follow the pattern (typeless formats other than 8-bit, depth-stencil, video...).
-fn parse_channels(name: &str) -> Option<Vec<Channel>> {
+pub(crate) fn parse_channels(name: &str) -> Option<Vec<Channel>> {
     let (components, suffix) = name.split_once('_')?;
     let mut channels = Vec::new();
     let mut chars = components.chars().peekable();

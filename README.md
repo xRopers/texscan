@@ -8,11 +8,12 @@ It's a sibling of [zscan](https://github.com/xRopers/zscan), which does the same
 
 - **Scan** a file for DDS textures, with their exact sizes, dimensions, mips and pixel formats.
 - **Extract** them as `.dds` files, or export them as PNG.
+- **Pack** edited textures back into a copy of the file, like packzip: edit the PNG (texscan re-encodes it and rebuilds the mips) or drop in a new `.dds`.
 - **Browse** them in a desktop app: thumbnails, a sortable table, and a preview with mip, face, slice and channel controls.
 
 ![texscan's desktop app: thumbnails of every texture in an archive, with a brick texture open in the preview](docs/images/texscan-gui-grid.png)
 
-**Status: early.** Putting edited textures back (like packzip) and more formats (KTX, PNG and others) are next.
+**Status: early.** More formats (KTX, PNG and others) are next.
 
 ## Build
 
@@ -28,6 +29,9 @@ cargo build --release
 texscan scan game.pak -o manifest.json      # list textures, write a manifest
 texscan extract game.pak -m manifest.json -d textures/
 texscan extract game.pak -m manifest.json -d textures/ --png   # also as PNG
+# ...edit textures/*.png, or replace a .dds...
+texscan pack game.pak -m manifest.json -d textures/ --dry-run   # what would change
+texscan pack game.pak -m manifest.json -d textures/             # writes game.packed.pak
 ```
 
 ```
@@ -42,6 +46,17 @@ texscan extract game.pak -m manifest.json -d textures/ --png   # also as PNG
 Every command takes `--json`. The input is never modified. `extract` refuses a file that no longer matches the manifest (`--force` overrides).
 
 `--png` also saves each texture's full-size image as PNG: one file per array element, cube face (`_px`, `_nx`, `_py`, `_ny`, `_pz`, `_nz`) and volume slice. Colours are exported as stored: sRGB stays sRGB, HDR values are clipped to 0–1, and single-channel formats come out grey.
+
+## Putting edited textures back
+
+`pack` looks through the extract folder for textures you changed:
+
+- **An edited PNG** (same size as the texture). texscan encodes it in the texture's pixel format, BC1–BC7 included, and rebuilds its mip levels from it. PNGs you didn't touch are recognised and left alone, so you can export everything and edit one.
+- **A replacement `.dds`** with the same dimensions, mip count, faces, array size and pixel format (a DX10 or legacy header both work). Its pixel data is used as is.
+
+Textures keep their exact size and their original header, so nothing else in the file moves and no offsets need fixing. The input is never modified: pack writes a new file (`game.packed.pak` by default), reads it back and checks every changed texture before putting it in place.
+
+Some things can't be written back yet: signed BC4/BC5/BC6H, 4:2:2 video formats, R11G11B10 and R9G9B9E5. A palettized texture can only take colours already in its palette. PNGs are 8-bit, so an HDR texture edited as PNG loses values above 1; replace its `.dds` instead. BC1 is written opaque.
 
 `--show-rejected` lists headers that look like DDS but can't be used, and why (for example an unknown pixel format, or a texture cut off by the end of the file).
 

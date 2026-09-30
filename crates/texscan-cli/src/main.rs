@@ -5,8 +5,8 @@ use anyhow::{Result, bail};
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 use texscan_core::{
-    Container, ExtractOptions, FoundTexture, Manifest, Rejected, ScanOptions, SourceInfo, TextureEntry, extract_all, input,
-    scan,
+    Container, ExtractOptions, FoundTexture, Manifest, Outcome, PackOptions, Rejected, ScanOptions, SourceInfo, TextureEntry,
+    extract_all, input, load_edits, pack, scan,
 };
 
 #[derive(Parser)]
@@ -54,6 +54,28 @@ enum Command {
         /// Filters for the fresh scan (ignored with --manifest)
         #[command(flatten)]
         filters: ScanArgs,
+    },
+    /// Put edited textures from an extract folder back into a copy of the input. Edit a
+    /// texture's PNG (same size; mips are regenerated) or replace its .dds with one of
+    /// the same dimensions, mips and pixel format. Textures keep their size, so nothing
+    /// else in the file moves
+    Pack {
+        file: PathBuf,
+        /// Manifest from `texscan scan -o`
+        #[arg(short, long)]
+        manifest: PathBuf,
+        /// Folder written by `texscan extract` (with `--png` to edit PNGs)
+        #[arg(short = 'd', long = "dir", value_name = "DIR")]
+        dir: PathBuf,
+        /// Output file [default: <input stem>.packed.<ext> next to the input]
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Show what would change without writing anything
+        #[arg(long)]
+        dry_run: bool,
+        /// Pack even if the input's size or CRC no longer matches the manifest
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -149,8 +171,82 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
+        Command::Pack { file, manifest, dir, output, dry_run, force } => {
+            let data = input::open(&file)?;
+            let manifest = Manifest::load(&manifest)?;
+            let found = load_edits(&data, &manifest, &dir)?;
+            let result = pack(&data, &manifest, &found.edits, &PackOptions { verify_source: !force })?;
+            let output = output.unwrap_or_else(|| default_output(&file));
+            if !dry_run && result.changed() > 0 {
+                if same_file(&output, &file) {
+                    bail!("the output would overwrite the input; choose another --output");
+                }
+                result.write_file(&data, &output)?;
+            }
+            if cli.json {
+                let rows: Vec<_> = result
+                    .textures
+                    .iter()
+                    .map(|t| PackJson {
+                        id: t.id,
+                        offset: t.offset,
+                        outcome: match t.outcome {
+                            Outcome::Replaced => "replaced",
+                            Outcome::Reencoded { .. } => "reencoded",
+                            Outcome::Unchanged => "unchanged",
+                        },
+                        note: t.note.as_deref(),
+                    })
+                    .collect();
+                let written = (!dry_run && result.changed() > 0).then(|| output.display().to_string());
+                print_json(&serde_json::json!({ "textures": rows, "output": written }))?;
+            } else {
+                for t in &result.textures {
+                    let what = match &t.outcome {
+                        Outcome::Replaced => "replaced from the .dds".to_string(),
+                        Outcome::Reencoded { images, mips } => format!("{images} image(s) encoded, {mips} mip(s) each"),
+                        Outcome::Unchanged => "unchanged (the edit gives the same bytes)".to_string(),
+                    };
+                    println!("texture {:>3} at {:#x}: {what}", t.id, t.offset);
+                    if let Some(note) = &t.note {
+                        println!("    note: {note}");
+                    }
+                }
+                match (result.changed(), dry_run) {
+                    (0, _) => println!("nothing to pack: no edited textures in {}", dir.display()),
+                    (n, true) => println!("dry run: {n} texture(s) would change; nothing written"),
+                    (n, false) => println!("{n} texture(s) packed into {} (verified)", output.display()),
+                }
+            }
+        }
     }
     Ok(())
+}
+
+/// `game.pak` → `game.packed.pak` next to it.
+fn default_output(input: &std::path::Path) -> PathBuf {
+    let stem = input.file_stem().map_or_else(|| "output".into(), |s| s.to_string_lossy().into_owned());
+    let name = match input.extension() {
+        Some(ext) => format!("{stem}.packed.{}", ext.to_string_lossy()),
+        None => format!("{stem}.packed"),
+    };
+    input.with_file_name(name)
+}
+
+fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+#[derive(Serialize)]
+struct PackJson<'a> {
+    id: u32,
+    offset: u64,
+    outcome: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<&'a str>,
 }
 
 #[derive(Serialize)]

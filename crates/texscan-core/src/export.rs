@@ -21,6 +21,24 @@ pub fn encode_png(image: &Image) -> Vec<u8> {
     out
 }
 
+/// Read a PNG of any colour type and bit depth as 8-bit RGBA.
+pub fn decode_png(bytes: &[u8]) -> std::result::Result<Image, String> {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
+    let mut buf = vec![0; reader.output_buffer_size().ok_or("PNG too large")?];
+    let frame = reader.next_frame(&mut buf).map_err(|e| e.to_string())?;
+    buf.truncate(frame.buffer_size());
+    let rgba: Vec<u8> = match frame.color_type {
+        png::ColorType::Rgba => buf,
+        png::ColorType::Rgb => buf.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
+        png::ColorType::GrayscaleAlpha => buf.as_chunks::<2>().0.iter().flat_map(|p| [p[0], p[0], p[0], p[1]]).collect(),
+        png::ColorType::Grayscale => buf.iter().flat_map(|&g| [g, g, g, 255]).collect(),
+        png::ColorType::Indexed => return Err("indexed PNG wasn't expanded".into()),
+    };
+    Ok(Image { width: frame.width, height: frame.height, rgba })
+}
+
 /// The images a PNG export writes: the top mip of every layer and slice, each with a
 /// file name suffix. A plain 2D texture gives one image with no suffix; otherwise
 /// `_a{n}` for the array element, `_px`/`_nx`/... for the cube face and `_z{n}` for the

@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 bcdec_rs.workspace = true
+block_compression.workspace = true
 crc32fast.workspace = true
 memchr.workspace = true
 memmap2.workspace = true

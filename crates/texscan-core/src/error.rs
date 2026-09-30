@@ -18,6 +18,15 @@ pub enum Error {
     #[error("texture {id} at offset {offset:#x}: {reason}")]
     Texture { id: u32, offset: u64, reason: String },
 
+    #[error("texture {id} at offset {offset:#x}: {reason}")]
+    Edit { id: u32, offset: u64, reason: String },
+
+    #[error("cannot pack: {0}")]
+    Pack(String),
+
+    #[error("verification failed for texture {id} at offset {offset:#x}: {reason}")]
+    Verify { id: u32, offset: u64, reason: String },
+
     #[error("manifest names an unsafe output file {0:?} (must be a plain file name)")]
     BadFilename(String),
 }

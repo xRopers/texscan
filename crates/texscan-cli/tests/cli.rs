@@ -94,3 +94,38 @@ fn extract_png_writes_one_png_per_image() {
     let cube = f.expected.iter().find(|e| e.spec.cube).unwrap();
     assert!(out_dir.join(format!("{:08x}_nz.png", cube.offset)).exists());
 }
+
+#[test]
+fn extract_edit_a_png_and_pack() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = texscan_fixtures::dds_archive();
+    let input = write_fixture(dir.path(), &f);
+    let manifest = dir.path().join("m.json");
+    let out_dir = dir.path().join("out");
+    assert!(texscan().arg("scan").arg(&input).arg("-o").arg(&manifest).output().unwrap().status.success());
+    assert!(texscan().arg("extract").arg(&input).arg("-m").arg(&manifest).arg("-d").arg(&out_dir).arg("--png").output().unwrap().status.success());
+
+    // Nothing edited yet.
+    let run = |extra: &[&str]| texscan().arg("pack").arg(&input).arg("-m").arg(&manifest).arg("-d").arg(&out_dir).args(extra).output().unwrap();
+    let out = run(&[]);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("nothing to pack"), "{}", String::from_utf8_lossy(&out.stdout));
+
+    // Paint the A8R8G8B8 texture white.
+    let t = &f.expected[2];
+    let png = out_dir.join(format!("{:08x}.png", t.offset));
+    let white = texscan_core::Image { width: 32, height: 16, rgba: vec![255; 32 * 16 * 4] };
+    fs::write(&png, texscan_core::encode_png(&white)).unwrap();
+    let out = run(&["--dry-run"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("1 image(s) encoded, 3 mip(s) each") && text.contains("dry run: 1 texture(s)"), "{text}");
+    let packed = dir.path().join("dds_archive.packed.bin");
+    assert!(!packed.exists());
+
+    let out = run(&[]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let data = fs::read(&packed).unwrap();
+    let pixels = &data[t.offset + 128..t.offset + 128 + 32 * 16 * 4];
+    assert!(pixels.iter().all(|&b| b == 255));
+    assert_eq!(data[..t.offset], f.data[..t.offset]);
+    assert_eq!(data[t.offset + t.size..], f.data[t.offset + t.size..]);
+}

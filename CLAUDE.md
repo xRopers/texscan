@@ -6,8 +6,8 @@ Find standard textures (DDS first, then KTX, PNG and others) inside arbitrary bi
 ## Language and key crates
 - Rust workspace, edition 2024, MSRV 1.89, license GPL-2.0-or-later (like zscan)
 - `memchr` (magic search), `memmap2` (large inputs), `rayon`, `clap`, `serde` + `serde_json` (manifest), `crc32fast`, `thiserror`/`anyhow`
-- `bcdec_rs` (MIT, BC1–BC7 decoding) and `png` (MIT/Apache) for previews and PNG export
-- Later: a BC encoder for importing edits; ETC/ASTC/PVRTC decoding for KTX (`texture2ddecoder`, MIT/Apache, has them, but its BC decoders are wrong on edge cases, see below). Check licenses against GPL-2.0-or-later before adding
+- `bcdec_rs` (MIT, BC1–BC7 decoding) and `png` (MIT/Apache) for previews and PNG export; `block_compression` (MIT, CPU port of Intel's ISPC BC1–BC7 encoder, `default-features = false` to avoid wgpu) for pack
+- Later: ETC/ASTC/PVRTC decoding for KTX (`texture2ddecoder`, MIT/Apache, has them, but its BC decoders are wrong on edge cases, see below). Check licenses against GPL-2.0-or-later before adding
 
 ## Layout
 ```
@@ -27,6 +27,7 @@ The core must never depend on the CLI or GUI.
 ```
 texscan scan    <file> [-o manifest.json] [--show-rejected] [--formats dds]
 texscan extract <file> [-m manifest.json] -d out/ [--force] [--png]
+texscan pack    <file> -m manifest.json -d out/ [-o packed] [--dry-run] [--force]
 ```
 All commands support `--json`. Planned: `pack`, `try --at OFF --format F` (with `--width/--height/--mips/--pixel-format` for headerless textures), `fields`, `info`.
 
@@ -38,7 +39,7 @@ All commands support `--json`. Planned: `pack`, `try --at OFF --format F` (with 
 ## Build order
 1. Workspace, `TextureFormat` trait, DDS scan + manifest + extract, fixtures. **(done)**
 2. Decode to RGBA (BCn and uncompressed) for PNG export and previews. **(done)**
-3. Pack: import a PNG, encode to the original format with mips, same size, verify; or reinject an edited `.dds` of the same size and format. Temp file, verify, rename (as zscan's `output.rs`).
+3. Pack: import a PNG, encode to the original format with mips, same size, verify; or reinject an edited `.dds` of the same size and format. Temp file, verify, rename (as zscan's `output.rs`). **(done: CLI; GUI next)**
 4. More formats (KTX1/2, PNG, JPEG, BMP, PVR3, ASTC, VTF, WebP; TGA opt-in, no magic), length fields and relocation (port zscan's `fields.rs`), parallel chunked scanning for multi-GB files.
 5. Headerless textures: `try` with explicit layout, then heuristics.
 6. GUI (egui, like zscan-gui): thumbnail grid, table, preview. **(viewer done)** Later: replace/revert edits, pack window, before/after preview.
@@ -59,6 +60,10 @@ All commands support `--json`. Planned: `pack`, `try --at OFF --format F` (with 
   - `session.rs` holds state and slow operations (open + scan in one job, since scanning is fast; save DDS/PNG; extract), no drawing. `jobs.rs` runs one at a time on a worker thread. `thumbs.rs` decodes thumbnails on rayon's pool for visible tiles only, from the smallest mip at least 160 px across, box-filtered down. `preview.rs` decodes the selected image (layer, mip, slice) off the UI thread and applies the channel toggles when uploading. `widgets.rs` has the file strip and a repeating checkerboard texture. `app.rs` draws.
   - Tiles are painted, so each one sets accesskit info (`"{dims} {format} at {offset}"`) for tests. ComboBox selected text isn't a label in the accessibility tree; tests check `App::shown_image()` instead.
   - Tests: `tests/ui.rs` drives the real window with `egui_kittest` (no GPU). For screenshots, temporarily enable kittest's `wgpu` + `snapshot` features and save `harness.render()`; don't commit that. README images come from `docs/make_demo.py` (procedural textures with its own tiny BC1/BC3/BC5 encoder), opened by a relative path so no user folder shows.
+- Encoding (`encode.rs`): the reverse of decode for every format it can decode except signed BC4/BC5/BC6H, 4:2:2, planar, R11G11B10 and R9G9B9E5. BC via `block_compression` in parallel over rows of blocks, edges padded to whole blocks (its API needs multiples of 4); BC7 picks opaque or alpha settings by content; BC6H takes 8-bit values as 0–1 halves. Palette formats only take colours already in the palette. `mip_chain` box-filters each level; `volume_mip_chain` also averages slice pairs.
+- Pack (`pack.rs`): `TextureEdit::Texture(dds bytes)` (same width/height/depth/mips/array/faces and pixel format, by name or matching DXGI + decode kind, so a legacy DXT5 takes a DX10 BC3_UNORM) keeps the original header and takes the new pixel data; `TextureEdit::Images` (new top mips by (layer, slice)) re-encodes them and regenerates their mips (all mips of every slice for a volume). `pack_texture` does one texture (the GUI's edited preview uses it); `pack` does all, checking the source first; every new texture must parse to the same `TextureInfo`. `PackResult::write_file` streams input + patches to a temp file, reads it back, checks length and each changed texture's CRC, then renames (`output.rs`).
+  - `load_edits(data, manifest, dir)`: a `.dds` whose CRC changed, or PNGs named as extract names them whose pixels differ from the decoded original (so untouched exports are skipped); a PNG of the wrong size or both kinds for one texture is an error.
+  - Checked by editing the demo archive with Pillow: RGBA8 face bit-exact, BC1 bricks mean error 0.28 (max 74 on sharp white edges, normal for BC1). BC1 with transparency is written opaque (noted in the result).
 - Manifest v1 (`manifest.rs`): per texture id, offset, size, format, header_size, dimensions, mips, array_size/faces (omitted when 1), pixel_format, dxgi_format, crc32 of the whole texture, file (`{offset:08x}.dds`). Extract checks the input's size and CRC (`--force` skips that) and each texture's CRC.
 - Fixtures: `texscan-fixtures` writes DDS headers and computes sizes independently of the core. `dds_archive` covers legacy/DX10, mips, mip count 0, cube (DX10 and legacy), volume, array, non-power-of-two, back-to-back, a valid DDS inside another's pixel data (must be skipped), and traps (text, wrong pixel-format size, unknown FourCC, truncated). `checked_in_fixtures_are_current` fails if `tests/fixtures` is stale: `cargo run -p texscan-fixtures --bin gen-fixtures`.
 - cargo is at `%USERPROFILE%\.cargo\bin`, not on the Git Bash PATH; use `~/.cargo/bin/cargo` or PowerShell. `cargo test --workspace`; CI runs clippy with `-D warnings`.
