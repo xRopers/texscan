@@ -8,7 +8,7 @@ use egui::{ColorImage, TextureHandle, TextureOptions};
 use texscan_core::input::Input;
 use texscan_core::{Image, Subresource, TextureEntry, TextureInfo};
 
-use crate::session::decode_image;
+use crate::session::{EditSource, decode_edited, decode_image};
 
 /// Largest image decoded for display, in pixels.
 const MAX_PIXELS: u64 = 64 << 20;
@@ -19,6 +19,8 @@ pub struct Key {
     pub sub: Subresource,
     /// Session generation, so a rescan reloads.
     pub generation: u64,
+    /// Showing the edit, as of this edits generation; `None` for the original.
+    pub edited: Option<u64>,
 }
 
 /// Which channels to show. One colour channel on its own is shown as grey, as is alpha
@@ -76,6 +78,7 @@ impl Previewer {
         data: Arc<Input>,
         entry: TextureEntry,
         info: TextureInfo,
+        edit: Option<EditSource>,
         wake: impl Fn() + Send + 'static,
     ) {
         if self.key == Some(key) || self.pending.as_ref().is_some_and(|(k, _)| *k == key) {
@@ -87,7 +90,11 @@ impl Previewer {
             let result = if u64::from(w) * u64::from(h) > MAX_PIXELS {
                 Err(format!("{w}×{h} is too large to preview; pick a smaller mip"))
             } else {
-                decode_image(&data, &entry, &info, key.sub).map_err(|e| format!("{e:#}"))
+                match &edit {
+                    Some(edit) => decode_edited(&data, &entry, &info, edit, key.sub),
+                    None => decode_image(&data, &entry, &info, key.sub),
+                }
+                .map_err(|e| format!("{e:#}"))
             };
             let _ = tx.send(result);
             wake();

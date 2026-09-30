@@ -39,10 +39,10 @@ All commands support `--json`. Planned: `pack`, `try --at OFF --format F` (with 
 ## Build order
 1. Workspace, `TextureFormat` trait, DDS scan + manifest + extract, fixtures. **(done)**
 2. Decode to RGBA (BCn and uncompressed) for PNG export and previews. **(done)**
-3. Pack: import a PNG, encode to the original format with mips, same size, verify; or reinject an edited `.dds` of the same size and format. Temp file, verify, rename (as zscan's `output.rs`). **(done: CLI; GUI next)**
+3. Pack: import a PNG, encode to the original format with mips, same size, verify; or reinject an edited `.dds` of the same size and format. Temp file, verify, rename (as zscan's `output.rs`). **(done)**
 4. More formats (KTX1/2, PNG, JPEG, BMP, PVR3, ASTC, VTF, WebP; TGA opt-in, no magic), length fields and relocation (port zscan's `fields.rs`), parallel chunked scanning for multi-GB files.
 5. Headerless textures: `try` with explicit layout, then heuristics.
-6. GUI (egui, like zscan-gui): thumbnail grid, table, preview. **(viewer done)** Later: replace/revert edits, pack window, before/after preview.
+6. GUI (egui, like zscan-gui): thumbnail grid, table, preview, replace/revert, before/after preview, pack window. **(done)**
 7. Optionally scan inside compressed streams by depending on `zscan-core`.
 
 ## Status
@@ -58,6 +58,7 @@ All commands support `--json`. Planned: `pack`, `try --at OFF --format F` (with 
   - PNG export (`export.rs`): the top mip of every layer and slice, named `{stem}{suffix}.png` with `_a{n}` (array), `_px/_nx/_py/_ny/_pz/_nz` (cube face), `_z{n}` (slice).
 - GUI (`crates/texscan-gui`, egui/eframe 0.36, `rfd` dialogs, same layering as zscan-gui): `cargo run -p texscan-gui --release -- [FILE]`.
   - `session.rs` holds state and slow operations (open + scan in one job, since scanning is fast; save DDS/PNG; extract), no drawing. `jobs.rs` runs one at a time on a worker thread. `thumbs.rs` decodes thumbnails on rayon's pool for visible tiles only, from the smallest mip at least 160 px across, box-filtered down. `preview.rs` decodes the selected image (layer, mip, slice) off the UI thread and applies the channel toggles when uploading. `widgets.rs` has the file strip and a repeating checkerboard texture. `app.rs` draws.
+  - Edits (`Session::edits`: id -> `EditSource::Dds(path)` or `Images((layer, slice) -> png path)`) are read when previewed or packed. The preview's Edited view runs `pack_texture` on the one texture and decodes the result, so it shows the encoding loss. Dropping a PNG while a texture is selected replaces the image shown. Import from folder maps `load_edits` results back to paths. Pack window: dry run, then write via a save dialog (refuses to overwrite the input); "Open it" opens the result. Open/close/rescan/exit with edits asks first (window close too). Thumbnails show the original; tiles and rows get an "edited" badge.
   - Tiles are painted, so each one sets accesskit info (`"{dims} {format} at {offset}"`) for tests. ComboBox selected text isn't a label in the accessibility tree; tests check `App::shown_image()` instead.
   - Tests: `tests/ui.rs` drives the real window with `egui_kittest` (no GPU). For screenshots, temporarily enable kittest's `wgpu` + `snapshot` features and save `harness.render()`; don't commit that. README images come from `docs/make_demo.py` (procedural textures with its own tiny BC1/BC3/BC5 encoder), opened by a relative path so no user folder shows.
 - Encoding (`encode.rs`): the reverse of decode for every format it can decode except signed BC4/BC5/BC6H, 4:2:2, planar, R11G11B10 and R9G9B9E5. BC via `block_compression` in parallel over rows of blocks, edges padded to whole blocks (its API needs multiples of 4); BC7 picks opaque or alpha settings by content; BC6H takes 8-bit values as 0–1 halves. Palette formats only take colours already in the palette. `mip_chain` box-filters each level; `volume_mip_chain` also averages slice pairs.

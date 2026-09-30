@@ -73,6 +73,10 @@ Open a file (or drop one on the window) and it's scanned straight away. Every te
 - fit to the pane, or zoom with the slider or Ctrl + mouse wheel; hover to read a pixel's value;
 - save it as `.dds`, or the image shown as PNG.
 
+To edit, use **Replace with PNG…** (or drop a PNG on the window) for the image shown, or **Replace with DDS…** for the whole texture. The preview's **Edited** view shows the texture exactly as it will be written, encoded in its own pixel format; **Original** shows what's in the file. **Textures > Import edits from folder…** picks up everything you changed in a folder written by Extract. Then **Pack…**: a dry run lists what will change, and **Write packed file…** writes a new file and checks it.
+
+![A brick texture replaced with an edited PNG, previewed as it will be written, and the Pack window's dry run](docs/images/texscan-gui-pack.png)
+
 The strip along the top shows where each texture sits in the file (blue: block-compressed, green: uncompressed, orange: high precision), with headers that couldn't be used marked in red. **Textures > Extract all** saves every texture at once.
 
 ![A cube map's +Y face in the preview](docs/images/texscan-gui-cube.png)

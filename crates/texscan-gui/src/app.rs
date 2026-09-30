@@ -5,15 +5,16 @@ use std::path::PathBuf;
 
 use egui::{Align, Color32, Key, Layout, Modifiers, RichText, Sense, Stroke, StrokeKind, TextureHandle, Ui, Vec2, ViewportCommand};
 use egui_extras::{Column, TableBuilder};
-use texscan_core::{Subresource, TextureEntry, TextureInfo};
+use texscan_core::{Image, Outcome, Subresource, TextureEntry, TextureInfo};
 
 use crate::jobs::{Jobs, finish};
 use crate::preview::{self, Channels, Previewer};
-use crate::session::{self, Level, Session, human_size};
+use crate::session::{self, EditSource, Level, Session, human_size};
 use crate::thumbs::Thumbnails;
 use crate::widgets::{REJECTED_COLOR, checker_texture, file_strip, fit, paint_checker, texture_color};
 
 const CUBE_FACES: [&str; 6] = ["+X", "−X", "+Y", "−Y", "+Z", "−Z"];
+const EDITED_COLOR: Color32 = Color32::from_rgb(240, 160, 60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
@@ -38,6 +39,7 @@ enum SortKey {
     Mips,
     Layers,
     PixelFormat,
+    Edited,
 }
 
 /// How the preview is scaled.
@@ -70,8 +72,14 @@ pub struct App {
     pub sub: Subresource,
     pub channels: Channels,
     pub zoom: Zoom,
+    /// Preview the edit rather than the original, for an edited texture.
+    pub show_edited: bool,
     show_log: bool,
     pub show_rejected: bool,
+    pub show_pack: bool,
+    /// An action waiting for "discard edits?" to be answered.
+    pub confirm: Option<Action>,
+    allow_close: bool,
     title: String,
 }
 
@@ -94,15 +102,28 @@ impl App {
             sub: Subresource::default(),
             channels: Channels::default(),
             zoom: Zoom { fit: true, scale: 1.0 },
+            show_edited: true,
             show_log: false,
             show_rejected: false,
+            show_pack: false,
+            confirm: None,
+            allow_close: false,
             title: String::new(),
         }
     }
 
     // ----- actions -------------------------------------------------------------------
 
+    /// Run `action`, first asking if it would throw away edits.
     pub fn request(&mut self, action: Action) {
+        if self.session.edits.is_empty() {
+            self.perform(action);
+        } else {
+            self.confirm = Some(action);
+        }
+    }
+
+    fn perform(&mut self, action: Action) {
         match action {
             Action::OpenFile(path) => self.open_file(path),
             Action::Rescan => self.rescan(),
@@ -110,7 +131,10 @@ impl App {
                 self.session.close();
                 self.deselect();
             }
-            Action::Exit => self.ctx.send_viewport_cmd(ViewportCommand::Close),
+            Action::Exit => {
+                self.allow_close = true;
+                self.ctx.send_viewport_cmd(ViewportCommand::Close);
+            }
         }
     }
 
@@ -142,12 +166,82 @@ impl App {
         self.scroll_to_selected = true;
     }
 
-    /// Size of the image the preview shows, once decoded.
-    pub fn shown_image(&self) -> Option<(u32, u32)> {
+    /// Replace the image the preview shows (its layer and slice) with a PNG.
+    fn replace_with_png(&mut self, id: u32) {
+        let Some((_, info)) = self.session.texture(id) else { return };
+        let what = image_name(info, self.sub);
+        let Some(path) = rfd::FileDialog::new().add_filter("PNG", &["png"]).set_title(format!("New {what} for texture {id}")).pick_file()
+        else {
+            return;
+        };
+        self.session.set_image_edit(id, self.sub.layer, self.sub.slice, path);
+        self.show_edited = true;
+    }
+
+    fn replace_with_dds(&mut self, id: u32) {
+        let Some(path) = rfd::FileDialog::new().add_filter("DDS", &["dds"]).set_title(format!("Replacement for texture {id}")).pick_file()
+        else {
+            return;
+        };
+        self.session.set_dds_edit(id, path);
+        self.show_edited = true;
+    }
+
+    fn import_edits(&mut self) {
+        let (Some(file), Some(scanned)) = (&self.session.file, &self.session.scanned) else { return };
+        let Some(dir) = rfd::FileDialog::new().set_title("Folder with edited textures (from Extract)").pick_folder() else {
+            return;
+        };
+        let (data, manifest) = (file.data.clone(), scanned.manifest.clone());
+        self.jobs.start("Looking for edits", move || {
+            finish("Import edits", session::import_edits(&data, &manifest, &dir), move |s, found| {
+                s.set_imported_edits(&dir, found)
+            })
+        });
+    }
+
+    /// Pack the edits: a dry run, or written to `output`.
+    pub fn start_pack(&mut self, output: Option<PathBuf>) {
+        let (Some(file), Some(scanned)) = (&self.session.file, &self.session.scanned) else { return };
+        if output.as_deref().is_some_and(|out| same_file(out, &file.path)) {
+            self.session.error("Pack: the output would overwrite the input; choose another file");
+            return;
+        }
+        let (data, manifest, edits) = (file.data.clone(), scanned.manifest.clone(), self.session.edits.clone());
+        let label = if output.is_some() { "Packing" } else { "Dry run" };
+        self.jobs.start(label, move || {
+            let result = session::read_edits(&edits).and_then(|edits| session::run_pack(&data, &manifest, &edits, output.as_deref()));
+            finish("Pack", result, Session::set_pack_report)
+        });
+    }
+
+    fn pick_pack_output(&mut self) {
+        let Some(file) = &self.session.file else { return };
+        let mut dialog = rfd::FileDialog::new().set_title("Write the packed file to").set_file_name(session::default_output_name(&file.path));
+        if let Some(dir) = file.path.parent() {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(out) = dialog.save_file() {
+            self.start_pack(Some(out));
+        }
+    }
+
+    /// The image the preview shows, once decoded.
+    pub fn shown(&self) -> Option<&Image> {
         match (&self.preview.key, &self.preview.current) {
-            (Some(k), Some(Ok(image))) if Some(k.id) == self.selected && k.sub == self.sub => Some((image.width, image.height)),
+            (Some(k), Some(Ok(image))) if Some(k.id) == self.selected && k.sub == self.sub => Some(image),
             _ => None,
         }
+    }
+
+    /// Whether the preview shows the edit (and has decoded it).
+    pub fn shows_edit(&self) -> bool {
+        self.preview.key.is_some_and(|k| k.edited.is_some()) && self.shown().is_some()
+    }
+
+    /// Size of the image the preview shows, once decoded.
+    pub fn shown_image(&self) -> Option<(u32, u32)> {
+        self.shown().map(|image| (image.width, image.height))
     }
 
     /// Thumbnails made so far: (decoded, failed), and whether more are coming.
@@ -261,6 +355,8 @@ impl App {
 
         self.log_window();
         self.rejected_window();
+        self.pack_window();
+        self.confirm_modal();
         if self.jobs.busy() || self.preview.loading() || self.thumbs.pending() {
             self.ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
@@ -268,11 +364,23 @@ impl App {
 
     fn handle_input(&mut self, ui: &Ui) {
         let ctx = ui.ctx().clone();
+        if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close && !self.session.edits.is_empty() {
+            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+            self.confirm = Some(Action::Exit);
+        }
         let dropped = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()));
         if let Some(path) = dropped
             && !self.jobs.busy()
         {
-            self.request(Action::OpenFile(path));
+            // A PNG dropped while a texture is selected replaces the image shown.
+            let png = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("png"));
+            match self.selected {
+                Some(id) if png => {
+                    self.session.set_image_edit(id, self.sub.layer, self.sub.slice, path);
+                    self.show_edited = true;
+                }
+                _ => self.request(Action::OpenFile(path)),
+            }
         }
         if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::O)) && !self.jobs.busy() {
             self.pick_and_open();
@@ -344,6 +452,17 @@ impl App {
                 ui.close();
                 self.extract_all(true);
             }
+            if ui.add_enabled(has_textures && !busy, egui::Button::new("Import edits from folder…"))
+                .on_hover_text("Find the textures you changed in a folder written by Extract")
+                .clicked()
+            {
+                ui.close();
+                self.import_edits();
+            }
+            if ui.add_enabled(has_textures, egui::Button::new("Pack…")).clicked() {
+                ui.close();
+                self.show_pack = true;
+            }
             ui.separator();
             match self.selected {
                 Some(id) => {
@@ -354,6 +473,19 @@ impl App {
                     if ui.add_enabled(!busy, egui::Button::new("Save shown image as PNG…")).clicked() {
                         ui.close();
                         self.save_png(id, self.sub);
+                    }
+                    ui.separator();
+                    if ui.button("Replace shown image with PNG…").clicked() {
+                        ui.close();
+                        self.replace_with_png(id);
+                    }
+                    if ui.button("Replace texture with DDS…").clicked() {
+                        ui.close();
+                        self.replace_with_dds(id);
+                    }
+                    if ui.add_enabled(self.session.edits.contains_key(&id), egui::Button::new("Revert")).clicked() {
+                        ui.close();
+                        self.session.revert(id);
                     }
                 }
                 None => {
@@ -387,6 +519,11 @@ impl App {
         ui.horizontal(|ui| {
             if ui.add_enabled(!busy, egui::Button::new("Open…")).clicked() {
                 self.pick_and_open();
+            }
+            let n = self.session.edits.len();
+            let label = if n > 0 { format!("Pack ({n} edited)…") } else { "Pack…".to_string() };
+            if ui.add_enabled(self.session.scanned.is_some(), egui::Button::new(label)).clicked() {
+                self.show_pack = true;
             }
             ui.separator();
             ui.selectable_value(&mut self.view, View::Grid, "Thumbnails");
@@ -434,6 +571,9 @@ impl App {
                             && ui.link(RichText::new(format!("{rejected} rejected")).color(REJECTED_COLOR)).clicked()
                         {
                             self.show_rejected = true;
+                        }
+                        if !self.session.edits.is_empty() {
+                            ui.colored_label(EDITED_COLOR, format!("{} edited", self.session.edits.len()));
                         }
                         ui.label(format!("{} textures", self.session.textures().len()));
                     }
@@ -491,6 +631,7 @@ impl App {
                     || format!("{:#x}", t.offset).contains(&needle)
                     || t.id.to_string() == needle
                     || (needle == "cube" && t.faces > 1)
+                    || (needle == "edited" && self.session.edits.contains_key(&t.id))
             })
             .collect();
         let (key, ascending) = self.sort;
@@ -504,6 +645,7 @@ impl App {
                 SortKey::Mips => a.mips.cmp(&b.mips),
                 SortKey::Layers => (a.array_size * a.faces * a.depth).cmp(&(b.array_size * b.faces * b.depth)),
                 SortKey::PixelFormat => a.pixel_format.cmp(&b.pixel_format),
+                SortKey::Edited => self.session.edits.contains_key(&a.id).cmp(&self.session.edits.contains_key(&b.id)),
             };
             let ord = ord.then(a.offset.cmp(&b.offset));
             if ascending { ord } else { ord.reverse() }
@@ -544,13 +686,15 @@ impl App {
                         let (_, info) = session.texture(entry.id).expect("listed texture");
                         let waker = ctx.clone();
                         thumbs.request(&file.data, entry, info, move || waker.request_repaint());
-                        let response = thumb_tile(ui, cell, tile, entry, thumbs.get(entry.id), checker.as_ref(), selected == Some(entry.id));
+                        let edited = session.edits.contains_key(&entry.id);
+                        let marks = TileMarks { selected: selected == Some(entry.id), edited };
+                        let response = thumb_tile(ui, cell, tile, entry, thumbs.get(entry.id), checker.as_ref(), marks);
                         if response.clicked() {
                             clicked = Some(entry.id);
                         }
                         response.context_menu(|ui| {
                             clicked = Some(entry.id);
-                            texture_menu(ui, entry.id, &mut action);
+                            texture_menu(ui, entry.id, edited, &mut action);
                         });
                     }
                 });
@@ -580,7 +724,8 @@ impl App {
             .column(Column::auto().at_least(110.0))
             .column(Column::auto().at_least(40.0))
             .column(Column::auto().at_least(80.0))
-            .column(Column::remainder().at_least(120.0));
+            .column(Column::auto().at_least(160.0))
+            .column(Column::remainder().at_least(50.0));
         if self.scroll_to_selected {
             if let Some(row) = self.selected.and_then(|id| view.iter().position(|&i| textures[i].id == id)) {
                 table = table.scroll_to_row(row, Some(Align::Center));
@@ -595,6 +740,7 @@ impl App {
             ("Mips", SortKey::Mips),
             ("Images", SortKey::Layers),
             ("Pixel format", SortKey::PixelFormat),
+            ("Edited", SortKey::Edited),
         ];
         table
             .header(22.0, |mut header| {
@@ -637,13 +783,19 @@ impl App {
                     row.col(|ui| {
                         ui.colored_label(texture_color(t), &t.pixel_format);
                     });
+                    let edited = self.session.edits.contains_key(&t.id);
+                    row.col(|ui| {
+                        if edited {
+                            ui.colored_label(EDITED_COLOR, "edited");
+                        }
+                    });
                     let response = row.response();
                     if response.clicked() {
                         clicked = Some(t.id);
                     }
                     response.context_menu(|ui| {
                         clicked = Some(t.id);
-                        texture_menu(ui, t.id, &mut action);
+                        texture_menu(ui, t.id, edited, &mut action);
                     });
                 });
             });
@@ -659,6 +811,12 @@ impl App {
         match action {
             Some((id, MenuAction::SaveDds)) => self.save_dds(id),
             Some((id, MenuAction::SavePng)) => self.save_png(id, Subresource::default()),
+            Some((id, MenuAction::ReplacePng)) => {
+                self.select(id);
+                self.replace_with_png(id);
+            }
+            Some((id, MenuAction::ReplaceDds)) => self.replace_with_dds(id),
+            Some((id, MenuAction::Revert)) => self.session.revert(id),
             None => {}
         }
     }
@@ -700,6 +858,7 @@ impl App {
             ui.monospace(format!("{:08x}", entry.crc32));
             ui.end_row();
         });
+        let edit = self.session.edits.get(&id).cloned();
         ui.horizontal(|ui| {
             let busy = self.jobs.busy();
             if ui.add_enabled(!busy, egui::Button::new("Save as DDS…")).clicked() {
@@ -709,12 +868,32 @@ impl App {
                 self.save_png(id, self.sub);
             }
         });
+        ui.horizontal(|ui| {
+            let what = image_name(&info, self.sub);
+            if ui.button("Replace with PNG…").on_hover_text(format!("Replace the {what} shown below; its mips are rebuilt. Or drop a PNG on the window")).clicked() {
+                self.replace_with_png(id);
+            }
+            if ui.button("Replace with DDS…").on_hover_text("A .dds with the same dimensions, mips and pixel format").clicked() {
+                self.replace_with_dds(id);
+            }
+            if ui.add_enabled(edit.is_some(), egui::Button::new("Revert")).clicked() {
+                self.session.revert(id);
+            }
+        });
+        if let Some(edit) = &edit {
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(EDITED_COLOR, "Edited:");
+                let names: Vec<_> = edit.files().iter().map(|p| p.file_name().map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into_owned())).collect();
+                ui.label(names.join(", ")).on_hover_text(edit.files().iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n"));
+            });
+        }
         ui.separator();
-        self.image_controls(ui, &info);
+        self.image_controls(ui, &info, edit.is_some());
 
-        let key = preview::Key { id, sub: self.sub, generation: self.session.generation };
+        let edited = edit.is_some() && self.show_edited;
+        let key = preview::Key { id, sub: self.sub, generation: self.session.generation, edited: edited.then_some(self.session.edits_generation) };
         let ctx = self.ctx.clone();
-        self.preview.request(key, data, entry, info.clone(), move || ctx.request_repaint());
+        self.preview.request(key, data, entry, info.clone(), edit.filter(|_| edited), move || ctx.request_repaint());
         if self.preview.key != Some(key) {
             ui.horizontal(|ui| {
                 ui.spinner();
@@ -730,7 +909,15 @@ impl App {
     }
 
     /// Mip, face, element, slice, channel and zoom controls.
-    fn image_controls(&mut self, ui: &mut Ui, info: &TextureInfo) {
+    fn image_controls(&mut self, ui: &mut Ui, info: &TextureInfo, edited: bool) {
+        if edited {
+            ui.horizontal(|ui| {
+                ui.label("Show");
+                ui.selectable_value(&mut self.show_edited, false, "Original");
+                ui.selectable_value(&mut self.show_edited, true, RichText::new("Edited").color(EDITED_COLOR))
+                    .on_hover_text("As pack will write it, encoded in the texture's pixel format");
+            });
+        }
         let sub = &mut self.sub;
         ui.horizontal_wrapped(|ui| {
             if info.mips > 1 {
@@ -834,6 +1021,120 @@ impl App {
         });
     }
 
+    fn pack_window(&mut self) {
+        let mut open = self.show_pack;
+        let (mut dry_run, mut write, mut open_packed) = (false, false, None);
+        egui::Window::new("Pack").open(&mut open).default_size([620.0, 360.0]).show(&self.ctx.clone(), |ui| {
+            let busy = self.jobs.busy();
+            if self.session.edits.is_empty() {
+                ui.label("No edits yet. Replace a texture's image with a PNG, or the whole texture with a DDS, from the details pane or the Textures menu; or import a folder of edits written by Extract.");
+            } else {
+                ui.label(format!("{} edited texture(s):", self.session.edits.len()));
+                egui::Grid::new("pack-edits").striped(true).num_columns(2).spacing([12.0, 3.0]).show(ui, |ui| {
+                    for (id, edit) in &self.session.edits {
+                        ui.label(format!("texture {id}"));
+                        ui.label(match edit {
+                            EditSource::Dds(p) => format!("DDS {}", p.display()),
+                            EditSource::Images(m) => format!("{} image(s): {}", m.len(), m.values().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")),
+                        });
+                        ui.end_row();
+                    }
+                });
+            }
+            ui.add_space(6.0);
+            ui.weak("Each texture keeps its size and header, so nothing else in the file moves. The input is never changed: the output is a new file, read back and checked before it's kept.");
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                let can = !busy && !self.session.edits.is_empty();
+                if ui.add_enabled(can, egui::Button::new("Dry run")).clicked() {
+                    dry_run = true;
+                }
+                if ui.add_enabled(can, egui::Button::new("Write packed file…")).clicked() {
+                    write = true;
+                }
+            });
+            if let Some(report) = &self.session.last_pack {
+                ui.separator();
+                egui::Grid::new("pack-report").striped(true).num_columns(4).spacing([12.0, 3.0]).show(ui, |ui| {
+                    for h in ["#", "Offset", "Result", "Note"] {
+                        ui.strong(h);
+                    }
+                    ui.end_row();
+                    for t in &report.textures {
+                        ui.label(t.id.to_string());
+                        ui.monospace(format!("{:#x}", t.offset));
+                        ui.label(match &t.outcome {
+                            Outcome::Replaced => "pixel data replaced from the DDS".to_string(),
+                            Outcome::Reencoded { images, mips } => format!("{images} image(s) encoded, {mips} mip(s) each"),
+                            Outcome::Unchanged => "unchanged (same bytes as the original)".to_string(),
+                        });
+                        match &t.note {
+                            Some(note) => ui.colored_label(ui.visuals().warn_fg_color, note),
+                            None => ui.label(""),
+                        };
+                        ui.end_row();
+                    }
+                });
+                match &report.written {
+                    Some(path) => {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("Written and verified: {}", path.display()));
+                            if ui.button("Open it").clicked() {
+                                open_packed = Some(path.clone());
+                            }
+                        });
+                    }
+                    None => {
+                        ui.label(format!("Dry run: {} texture(s) would change.", report.changed()));
+                    }
+                }
+            }
+        });
+        self.show_pack = open;
+        if dry_run {
+            self.start_pack(None);
+        }
+        if write {
+            self.pick_pack_output();
+        }
+        if let Some(path) = open_packed {
+            self.request(Action::OpenFile(path));
+        }
+    }
+
+    fn confirm_modal(&mut self) {
+        let Some(action) = self.confirm.clone() else { return };
+        let what = match &action {
+            Action::OpenFile(_) => "Open another file",
+            Action::Rescan => "Scan again",
+            Action::Close => "Close the file",
+            Action::Exit => "Exit",
+        };
+        let mut choice = None;
+        egui::Modal::new(egui::Id::new("confirm")).show(&self.ctx.clone(), |ui| {
+            ui.set_max_width(380.0);
+            ui.heading("Unpacked edits");
+            ui.label(format!("{what}? The {} edit(s) haven't been packed and will be forgotten (the edited files stay where they are).", self.session.edits.len()));
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Discard edits").clicked() {
+                    choice = Some(true);
+                }
+                if ui.button("Cancel").clicked() {
+                    choice = Some(false);
+                }
+            });
+        });
+        match choice {
+            Some(true) => {
+                self.confirm = None;
+                self.perform(action);
+            }
+            Some(false) => self.confirm = None,
+            None => {}
+        }
+    }
+
     fn log_window(&mut self) {
         let mut open = self.show_log;
         egui::Window::new("Log").open(&mut open).default_size([640.0, 320.0]).show(&self.ctx.clone(), |ui| {
@@ -882,17 +1183,31 @@ impl eframe::App for App {
 enum MenuAction {
     SaveDds,
     SavePng,
+    ReplacePng,
+    ReplaceDds,
+    Revert,
 }
 
-fn texture_menu(ui: &mut Ui, id: u32, action: &mut Option<(u32, MenuAction)>) {
-    if ui.button("Save as DDS…").clicked() {
-        *action = Some((id, MenuAction::SaveDds));
-        ui.close();
-    }
-    if ui.button("Save as PNG…").clicked() {
-        *action = Some((id, MenuAction::SavePng));
-        ui.close();
-    }
+fn texture_menu(ui: &mut Ui, id: u32, edited: bool, action: &mut Option<(u32, MenuAction)>) {
+    let mut item = |ui: &mut Ui, enabled: bool, label: &str, what: MenuAction| {
+        if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+            *action = Some((id, what));
+            ui.close();
+        }
+    };
+    item(ui, true, "Save as DDS…", MenuAction::SaveDds);
+    item(ui, true, "Save as PNG…", MenuAction::SavePng);
+    ui.separator();
+    item(ui, true, "Replace with PNG…", MenuAction::ReplacePng);
+    item(ui, true, "Replace with DDS…", MenuAction::ReplaceDds);
+    item(ui, edited, "Revert", MenuAction::Revert);
+}
+
+/// How a grid tile is highlighted.
+#[derive(Debug, Clone, Copy)]
+struct TileMarks {
+    selected: bool,
+    edited: bool,
 }
 
 /// One tile of the grid: thumbnail on a checkerboard, then dimensions and format.
@@ -903,10 +1218,13 @@ fn thumb_tile(
     entry: &TextureEntry,
     thumb: Option<&Result<TextureHandle, String>>,
     checker: Option<&TextureHandle>,
-    selected: bool,
+    TileMarks { selected, edited }: TileMarks,
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(cell, Sense::click());
-    let label = format!("{} {} at {:#x}", dimensions(entry), entry.pixel_format, entry.offset);
+    let mut label = format!("{} {} at {:#x}", dimensions(entry), entry.pixel_format, entry.offset);
+    if edited {
+        label += ", edited";
+    }
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
     let visuals = ui.visuals();
     if selected {
@@ -930,6 +1248,11 @@ fn thumb_tile(
         None => {
             ui.painter().rect_filled(image_box, 2.0, visuals.extreme_bg_color);
         }
+    }
+    if edited {
+        let badge = egui::Rect::from_min_size(egui::Pos2::new(image_box.right() - 46.0, image_box.top() + 3.0), Vec2::new(43.0, 15.0));
+        ui.painter().rect_filled(badge, 3.0, EDITED_COLOR);
+        ui.painter().text(badge.center(), egui::Align2::CENTER_CENTER, "edited", egui::FontId::proportional(11.0), Color32::BLACK);
     }
     let small = egui::FontId::proportional(ui.text_style_height(&egui::TextStyle::Small));
     let text_top = image_box.bottom() + 3.0;
@@ -982,6 +1305,28 @@ fn image_suffix(info: &TextureInfo, sub: Subresource) -> String {
         s += &format!("_mip{}", sub.mip);
     }
     s
+}
+
+/// "image", "+Z face", "slice 3", "element 2, −X face" and so on: which image `sub` is.
+fn image_name(info: &TextureInfo, sub: Subresource) -> String {
+    let mut parts = Vec::new();
+    if info.array_size > 1 {
+        parts.push(format!("element {}", sub.layer / info.faces));
+    }
+    if info.faces > 1 {
+        parts.push(format!("{} face", CUBE_FACES.get((sub.layer % info.faces) as usize).copied().unwrap_or("?")));
+    }
+    if info.depth > 1 {
+        parts.push(format!("slice {}", sub.slice));
+    }
+    if parts.is_empty() { "image".to_string() } else { parts.join(", ") }
+}
+
+fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
 }
 
 fn level_color(ui: &Ui, level: Level) -> Color32 {

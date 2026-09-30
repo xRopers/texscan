@@ -152,3 +152,111 @@ fn a_file_without_textures() {
     settle(&mut h);
     h.get_by_label("No textures found.");
 }
+
+/// A white PNG of `w`x`h` in `dir`.
+fn white_png(dir: &std::path::Path, w: u32, h: u32) -> PathBuf {
+    let path = dir.join(format!("white_{w}x{h}.png"));
+    let image = texscan_core::Image { width: w, height: h, rgba: vec![255; (w * h * 4) as usize] };
+    std::fs::write(&path, texscan_core::encode_png(&image)).unwrap();
+    path
+}
+
+#[test]
+fn replace_an_image_preview_the_edit_and_revert() {
+    let input = input();
+    let mut h = harness();
+    open(&mut h, &input);
+    let e = &input.fixture.expected[2];
+    assert_eq!((e.spec.name, e.spec.width, e.spec.height), ("A8R8G8B8", 32, 16));
+    h.state_mut().select(2);
+    h.run_steps(2);
+    let png = white_png(input._dir.path(), 32, 16);
+    h.state_mut().session.set_image_edit(2, 0, 0, png);
+    h.run_steps(2);
+
+    // The tile says it's edited, and the preview shows the edit as pack would write it.
+    h.get_by_label(&format!("32×16 A8R8G8B8 at {:#x}, edited", e.offset));
+    h.get_by_label("Pack (1 edited)…");
+    wait_until(&mut h, "the edited preview", |app| app.shows_edit());
+    assert!(h.state().shown().unwrap().rgba.iter().all(|&b| b == 255));
+
+    // "Original" shows the texture as it is in the file.
+    h.get_by_label("Original").click();
+    h.run_steps(2);
+    wait_until(&mut h, "the original preview", |app| app.shown().is_some() && !app.shows_edit());
+    assert!(!h.state().shown().unwrap().rgba.iter().all(|&b| b == 255));
+
+    h.get_by_label("Revert").click();
+    h.run_steps(2);
+    assert!(h.state().session.edits.is_empty());
+    assert!(h.query_by_label(&format!("32×16 A8R8G8B8 at {:#x}, edited", e.offset)).is_none());
+}
+
+#[test]
+fn pack_window_dry_run_then_write() {
+    let input = input();
+    let mut h = harness();
+    open(&mut h, &input);
+    let e = input.fixture.expected[2].clone();
+    let png = white_png(input._dir.path(), 32, 16);
+    h.state_mut().session.set_image_edit(2, 0, 0, png);
+    h.run_steps(2);
+    h.get_by_label("Pack (1 edited)…").click();
+    h.run_steps(2);
+    assert!(h.state().show_pack);
+    h.get_by_label("Dry run").click();
+    h.run_steps(1);
+    settle(&mut h);
+    h.get_by_label("Dry run: 1 texture(s) would change.");
+    h.get_by_label("1 image(s) encoded, 3 mip(s) each");
+
+    let out = input._dir.path().join("archive.packed.bin");
+    h.state_mut().start_pack(Some(out.clone()));
+    settle(&mut h);
+    h.get_by_label_contains("Written and verified:");
+    let packed = std::fs::read(&out).unwrap();
+    assert!(packed[e.offset + 128..e.offset + 128 + 32 * 16 * 4].iter().all(|&b| b == 255));
+    assert_eq!(packed[..e.offset], input.fixture.data[..e.offset]);
+
+    // Writing over the input is refused.
+    h.state_mut().start_pack(Some(input.path.clone()));
+    h.run_steps(1);
+    assert!(h.state().session.log.last().unwrap().text.contains("overwrite the input"));
+}
+
+#[test]
+fn closing_with_edits_asks_first() {
+    let input = input();
+    let mut h = harness();
+    open(&mut h, &input);
+    let png = white_png(input._dir.path(), 32, 16);
+    h.state_mut().session.set_image_edit(2, 0, 0, png);
+    h.state_mut().request(Action::Close);
+    h.run_steps(2);
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert!(h.state().session.file.is_some());
+    h.state_mut().request(Action::Close);
+    h.run_steps(2);
+    h.get_by_label("Discard edits").click();
+    h.run_steps(2);
+    assert!(h.state().session.file.is_none());
+    assert!(h.state().session.edits.is_empty());
+}
+
+#[test]
+fn import_edits_from_an_extract_folder() {
+    let input = input();
+    let file = texscan_gui::session::open_file(&input.path).unwrap();
+    let scanned = texscan_gui::session::run_scan(&file, &Default::default());
+    let dir = input._dir.path().join("out");
+    texscan_gui::session::extract(&file.data, &scanned.manifest, &dir, true).unwrap();
+    let e = &input.fixture.expected[2];
+    let png = dir.join(format!("{:08x}.png", e.offset));
+    let image = texscan_core::Image { width: 32, height: 16, rgba: vec![255; 32 * 16 * 4] };
+    std::fs::write(&png, texscan_core::encode_png(&image)).unwrap();
+    let (edits, unchanged) = texscan_gui::session::import_edits(&file.data, &scanned.manifest, &dir).unwrap();
+    assert_eq!(edits.len(), 1);
+    assert_eq!(edits[&2], texscan_gui::session::EditSource::Images([((0, 0), png)].into()));
+    assert!(unchanged > 10);
+}

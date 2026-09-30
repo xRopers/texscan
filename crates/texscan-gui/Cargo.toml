@@ -21,6 +21,7 @@ rfd = "0.17"
 texscan-core.workspace = true
 
 [dev-dependencies]
+texscan-core.workspace = true
 egui_kittest = "0.36"
 tempfile.workspace = true
 texscan-fixtures.workspace = true
