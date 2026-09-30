@@ -1,0 +1,170 @@
+{
+  "description": "DDS textures (legacy, DX10, mips, cube maps, volume, arrays, odd sizes) in an archive, plus traps",
+  "rejected": [
+    {
+      "offset": 81825,
+      "reason": "unknown FourCC"
+    },
+    {
+      "offset": 82114,
+      "reason": "truncated"
+    }
+  ],
+  "size": 82342,
+  "textures": [
+    {
+      "array_size": 1,
+      "crc32": "8a62daef",
+      "depth": 1,
+      "dxgi_format": 71,
+      "faces": 1,
+      "format": "dds",
+      "height": 128,
+      "mips": 9,
+      "offset": 114,
+      "pixel_format": "DXT1",
+      "size": 21992,
+      "width": 256
+    },
+    {
+      "array_size": 1,
+      "crc32": "fb75f361",
+      "depth": 1,
+      "dxgi_format": 77,
+      "faces": 1,
+      "format": "dds",
+      "height": 64,
+      "mips": 1,
+      "offset": 22143,
+      "pixel_format": "DXT5",
+      "size": 4224,
+      "width": 64
+    },
+    {
+      "array_size": 1,
+      "crc32": "c20b6635",
+      "depth": 1,
+      "dxgi_format": 87,
+      "faces": 1,
+      "format": "dds",
+      "height": 16,
+      "mips": 3,
+      "offset": 26367,
+      "pixel_format": "A8R8G8B8",
+      "size": 2816,
+      "width": 32
+    },
+    {
+      "array_size": 1,
+      "crc32": "01ef89a1",
+      "depth": 1,
+      "dxgi_format": 99,
+      "faces": 1,
+      "format": "dds",
+      "height": 128,
+      "mips": 8,
+      "offset": 29188,
+      "pixel_format": "BC7_UNORM_SRGB",
+      "size": 22020,
+      "width": 128
+    },
+    {
+      "array_size": 1,
+      "crc32": "b96f2329",
+      "depth": 1,
+      "dxgi_format": 71,
+      "faces": 6,
+      "format": "dds",
+      "height": 32,
+      "mips": 6,
+      "offset": 51208,
+      "pixel_format": "BC1_UNORM",
+      "size": 4324,
+      "width": 32
+    },
+    {
+      "array_size": 1,
+      "crc32": "c005363d",
+      "depth": 1,
+      "dxgi_format": 85,
+      "faces": 6,
+      "format": "dds",
+      "height": 16,
+      "mips": 1,
+      "offset": 55532,
+      "pixel_format": "R5G6B5",
+      "size": 3200,
+      "width": 16
+    },
+    {
+      "array_size": 1,
+      "crc32": "63cf66ab",
+      "depth": 8,
+      "dxgi_format": 61,
+      "faces": 1,
+      "format": "dds",
+      "height": 16,
+      "mips": 5,
+      "offset": 58743,
+      "pixel_format": "L8",
+      "size": 2469,
+      "width": 16
+    },
+    {
+      "array_size": 1,
+      "crc32": "fbe1d846",
+      "depth": 1,
+      "dxgi_format": 10,
+      "faces": 1,
+      "format": "dds",
+      "height": 24,
+      "mips": 6,
+      "offset": 61212,
+      "pixel_format": "R16G16B16A16_FLOAT",
+      "size": 10372,
+      "width": 40
+    },
+    {
+      "array_size": 1,
+      "crc32": "924f7425",
+      "depth": 1,
+      "dxgi_format": 77,
+      "faces": 1,
+      "format": "dds",
+      "height": 60,
+      "mips": 7,
+      "offset": 71648,
+      "pixel_format": "DXT5",
+      "size": 8400,
+      "width": 100
+    },
+    {
+      "array_size": 1,
+      "crc32": "2c5e8b56",
+      "depth": 1,
+      "dxgi_format": 83,
+      "faces": 1,
+      "format": "dds",
+      "height": 8,
+      "mips": 4,
+      "offset": 80048,
+      "pixel_format": "ATI2",
+      "size": 240,
+      "width": 8
+    },
+    {
+      "array_size": 3,
+      "crc32": "95a67366",
+      "depth": 1,
+      "dxgi_format": 98,
+      "faces": 1,
+      "format": "dds",
+      "height": 16,
+      "mips": 5,
+      "offset": 80288,
+      "pixel_format": "BC7_UNORM",
+      "size": 1252,
+      "width": 16
+    }
+  ]
+}

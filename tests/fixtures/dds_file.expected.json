@@ -1,0 +1,21 @@
+{
+  "description": "A single DX10 BC3 texture filling the whole file",
+  "rejected": [],
+  "size": 5636,
+  "textures": [
+    {
+      "array_size": 1,
+      "crc32": "92d4d162",
+      "depth": 1,
+      "dxgi_format": 77,
+      "faces": 1,
+      "format": "dds",
+      "height": 64,
+      "mips": 7,
+      "offset": 0,
+      "pixel_format": "BC3_UNORM",
+      "size": 5636,
+      "width": 64
+    }
+  ]
+}

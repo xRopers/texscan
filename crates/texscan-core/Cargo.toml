@@ -1,0 +1,20 @@
+[package]
+name = "texscan-core"
+description = "Find, extract and reinject textures inside binary files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+crc32fast.workspace = true
+memchr.workspace = true
+memmap2.workspace = true
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+texscan-fixtures.workspace = true
