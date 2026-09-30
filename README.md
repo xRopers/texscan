@@ -15,6 +15,10 @@ It's a sibling of [zscan](https://github.com/xRopers/zscan), which does the same
 
 **Status: early.** More formats (KTX1, PNG and others) are next.
 
+## Download
+
+Windows x64 builds are on the [Releases](https://github.com/xRopers/texscan/releases) page. The zip holds `texscan.exe` (command line) and `texscan-gui.exe` (desktop app). Nothing to install: the C runtime is built in.
+
 ## Build
 
 Rust 1.95 or later (1.89 for the command line alone):
