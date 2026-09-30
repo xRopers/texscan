@@ -9,4 +9,6 @@ publish = false
 
 [dependencies]
 crc32fast.workspace = true
+miniz_oxide.workspace = true
+ruzstd.workspace = true
 serde_json.workspace = true

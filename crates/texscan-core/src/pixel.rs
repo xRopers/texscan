@@ -67,10 +67,27 @@ pub enum Decode {
     Channels(&'static str),
     /// BC3 with red kept in the alpha channel (Doom 3 normal maps).
     Rxgb,
+    /// ETC2 or EAC 4×4 blocks.
+    Etc(Etc),
+    /// ASTC blocks of the layout's tile size. HDR blocks are clamped to 0–1.
+    Astc,
     /// 4:2:2 YUV with the byte order U, Y0, V, Y1 (no DXGI equivalent).
     Uyvy,
     /// Not decodable yet.
     None,
+}
+
+/// The ETC2/EAC block kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Etc {
+    Rgb,
+    /// RGB with one-bit ("punch-through") alpha.
+    Rgba1,
+    Rgba8,
+    R11,
+    R11Signed,
+    Rg11,
+    Rg11Signed,
 }
 
 impl PixelFormat {

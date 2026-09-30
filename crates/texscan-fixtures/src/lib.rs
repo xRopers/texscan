@@ -316,9 +316,12 @@ pub const KTX2_MAGIC: &[u8; 12] = b"\xABKTX 20\xBB\r\n\x1A\n";
 
 /// A KTX2 texture of `spec`'s shape with Vulkan format `vk`: header, level index, a
 /// small data format descriptor and key/value data, then the levels smallest first,
-/// each 16-byte aligned. With `scheme` (supercompression) non-zero the levels get
-/// made-up lengths, as compressed data would. `spec.mips` 0 is written as a level
-/// count of 0 (one level).
+/// each 16-byte aligned. `scheme` is the supercompression: 2 (Zstandard) and 3 (zlib)
+/// really compress each level; 1 (BasisLZ) stores made-up bytes of a made-up length.
+/// `spec.mips` 0 is written as a level count of 0 (one level).
+///
+/// The level data is random and drawn in the same order for every scheme, so the same
+/// seed gives the same pixels whether or not they're supercompressed.
 pub fn ktx2(spec: &DdsSpec, vk: u32, scheme: u32, rng: &mut Rng) -> Vec<u8> {
     let levels = spec.mips.max(1) as usize;
     let index_at = 80;
@@ -342,16 +345,38 @@ pub fn ktx2(spec: &DdsSpec, vk: u32, scheme: u32, rng: &mut Rng) -> Vec<u8> {
     out.extend_from_slice(&[0u8; 16]);
     // Level data, smallest mip first.
     let mut at = kvd_at + kvd.len();
-    let mut placed = vec![(0usize, Vec::new()); levels];
+    let mut placed = vec![(0usize, Vec::new(), 0u64); levels];
     for m in (0..levels).rev() {
         at = at.next_multiple_of(16);
-        let len = if scheme == 0 { spec.level_size(m as u32) } else { spec.level_size(m as u32) / 3 + 5 };
-        placed[m] = (at, rng.bytes(len));
+        let size = spec.level_size(m as u32);
+        let (stored, uncompressed) = match scheme {
+            // ASTC gets valid solid-colour ("void-extent") blocks: random bits aren't
+            // always decodable.
+            0 if matches!(spec.unit, Unit::Tiles(..)) => {
+                let blocks = size / 16;
+                let data = (0..blocks)
+                    .flat_map(|_| {
+                        let mut block = vec![0xFC, 0xFD, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+                        block.extend(rng.bytes(8));
+                        block
+                    })
+                    .collect();
+                (data, size as u64)
+            }
+            0 => (rng.bytes(size), size as u64),
+            2 => {
+                let raw = rng.bytes(size);
+                (ruzstd::encoding::compress_to_vec(&raw[..], ruzstd::encoding::CompressionLevel::Fastest), size as u64)
+            }
+            3 => (miniz_oxide::deflate::compress_to_vec_zlib(&rng.bytes(size), 6), size as u64),
+            _ => (rng.bytes(size / 3 + 5), 0),
+        };
+        let len = stored.len();
+        placed[m] = (at, stored, uncompressed);
         at += len;
     }
-    for (offset, bytes) in &placed {
-        let uncompressed = bytes.len() as u64;
-        for v in [*offset as u64, bytes.len() as u64, uncompressed] {
+    for (offset, bytes, uncompressed) in &placed {
+        for v in [*offset as u64, bytes.len() as u64, *uncompressed] {
             out.extend_from_slice(&v.to_le_bytes());
         }
     }
@@ -359,7 +384,7 @@ pub fn ktx2(spec: &DdsSpec, vk: u32, scheme: u32, rng: &mut Rng) -> Vec<u8> {
     out.resize(kvd_at, 0);
     out.extend_from_slice(&kvd);
     out.resize(at, 0);
-    for (offset, bytes) in placed {
+    for (offset, bytes, _) in placed {
         out[offset..offset + bytes.len()].copy_from_slice(&bytes);
     }
     out
@@ -370,7 +395,7 @@ pub fn ktx2_archive() -> Fixture {
     let mut rng = Rng::new(0x4B7);
     let mut f = Fixture::new(
         "ktx2_archive",
-        "KTX2 textures (BC7, cube, array, volume, 24-bit, ASTC, supercompressed) and a DDS in an archive, plus traps",
+        "KTX2 textures (BC7, cube, array, volume, 24-bit, ETC2, ASTC, Zstandard, zlib, BasisLZ) and a DDS in an archive, plus traps",
     );
     f.data.extend_from_slice(b"KPAK");
     f.filler(44, &mut rng);
@@ -398,9 +423,17 @@ pub fn ktx2_archive() -> Fixture {
     let (pf, unit) = dxt(b"DXT1");
     f.texture(DdsSpec::new(32, 32, 6, pf, unit, "DXT1", Some(71)), &mut rng);
     let astc = DdsSpec::new(50, 30, 1, Pf::Dx10(0), Unit::Tiles(6, 6, 16), "ASTC_6x6_UNORM_BLOCK", None);
-    add(&mut f, &mut rng, astc, 165, 0, false);
+    add(&mut f, &mut rng, astc, 165, 0, true);
     let zstd = DdsSpec::new(64, 64, 7, Pf::Dx10(0), Unit::Block(8), "BC1_RGBA_UNORM_BLOCK", Some(71));
-    add(&mut f, &mut rng, zstd, 133, 2, false);
+    add(&mut f, &mut rng, zstd, 133, 2, true);
+    let etc2 = DdsSpec::new(24, 20, 3, Pf::Dx10(0), Unit::Block(8), "ETC2_R8G8B8_UNORM_BLOCK", None);
+    add(&mut f, &mut rng, etc2, 147, 0, true);
+    let mut zlib = DdsSpec::new(16, 16, 5, Pf::Dx10(0), Unit::Bits(32), "R8G8B8A8_UNORM", Some(28));
+    zlib.cube = true;
+    add(&mut f, &mut rng, zlib, 37, 3, true);
+    // Basis Universal: sized from the level index, but not decodable.
+    let basis = DdsSpec::new(64, 32, 7, Pf::Dx10(0), Unit::Bits(0), "UNDEFINED (Basis Universal ETC1S)", None);
+    add(&mut f, &mut rng, basis, 0, 1, false);
     f.filler(40, &mut rng);
 
     // Three faces: clearly KTX2, but unusable.

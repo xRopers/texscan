@@ -114,17 +114,57 @@ fn a_dds_can_replace_a_ktx2_texture() {
     }
 }
 
+/// The same random level data written plain and supercompressed.
+fn plain_and_packed(scheme: u32) -> (Vec<u8>, Vec<u8>) {
+    let mut spec = DdsSpec::new(16, 16, 5, Pf::Dx10(0), Unit::Bits(32), "", None);
+    spec.cube = true;
+    (ktx2(&spec, 37, 0, &mut Rng::new(8)), ktx2(&spec, 37, scheme, &mut Rng::new(8)))
+}
+
 #[test]
-fn astc_and_supercompressed_textures_say_what_they_are() {
-    let (data, manifest) = archive();
-    for (name, why) in [("ASTC_6x6_UNORM_BLOCK", "ASTC_6x6_UNORM_BLOCK"), ("BC1_RGBA_UNORM_BLOCK", "Zstandard-supercompressed KTX2")] {
-        let t = manifest.textures.iter().find(|t| t.pixel_format == name).unwrap();
-        let info = texture_at(&data, t.offset, Container::Ktx2).unwrap().info;
-        let err = decode(&data[t.offset as usize..], &info, Subresource::default()).unwrap_err();
-        assert_eq!(err, DecodeError::Unsupported(why));
-        let image = Image { width: t.width, height: t.height, rgba: vec![0; (t.width * t.height * 4) as usize] };
-        let edits = [(t.id, TextureEdit::Images([((0, 0), image)].into()))].into();
-        let err = pack(&data, &manifest, &edits, &PackOptions::default()).unwrap_err();
-        assert!(err.to_string().contains("isn't supported yet"), "{err}");
+fn zstd_and_zlib_levels_decode_like_plain_ones() {
+    for scheme in [2, 3] {
+        let (plain, packed) = plain_and_packed(scheme);
+        let a = texture_at(&plain, 0, Container::Ktx2).unwrap().info;
+        let b = texture_at(&packed, 0, Container::Ktx2).unwrap().info;
+        assert_eq!(b.size, packed.len() as u64);
+        for layer in 0..6 {
+            for mip in 0..5 {
+                let sub = Subresource { layer, mip, slice: 0 };
+                assert_eq!(decode(&plain, &a, sub).unwrap(), decode(&packed, &b, sub).unwrap(), "scheme {scheme} {sub:?}");
+            }
+        }
+        // A corrupt level is an error, not a panic. (Damaging the data inside a frame
+        // needn't be: these frames have no checksum, so break its header instead.)
+        let mut broken = packed.clone();
+        let (mip0, _) = level(&broken, 0);
+        broken[mip0] ^= 0xff;
+        broken[mip0 + 1] ^= 0xff;
+        let err = decode(&broken, &b, Subresource::default());
+        assert!(matches!(err, Err(DecodeError::Decompress { mip: 0, .. })), "scheme {scheme}: {err:?}");
     }
+}
+
+#[test]
+fn what_can_be_read_but_not_written_says_so() {
+    let (data, manifest) = archive();
+    let blank = |t: &texscan_core::TextureEntry| Image { width: t.width, height: t.height, rgba: vec![0; (t.width * t.height * 4) as usize] };
+    let find = |name: &str| manifest.textures.iter().find(|t| t.pixel_format == name).unwrap();
+    for (name, why) in [
+        ("BC1_RGBA_UNORM_BLOCK", "Zstandard-supercompressed KTX2 can be read but not written yet"),
+        ("ASTC_6x6_UNORM_BLOCK", "writing ASTC_6x6_UNORM_BLOCK isn't supported yet"),
+        ("ETC2_R8G8B8_UNORM_BLOCK", "writing ETC2_R8G8B8_UNORM_BLOCK isn't supported yet"),
+    ] {
+        let t = find(name);
+        let info = texture_at(&data, t.offset, Container::Ktx2).unwrap().info;
+        decode(&data[t.offset as usize..], &info, Subresource::default()).unwrap();
+        let edits = [(t.id, TextureEdit::Images([((0, 0), blank(t))].into()))].into();
+        let err = pack(&data, &manifest, &edits, &PackOptions::default()).unwrap_err();
+        assert!(err.to_string().contains(why), "{name}: {err}");
+    }
+    // Basis Universal can't even be decoded.
+    let t = find("UNDEFINED (Basis Universal ETC1S)");
+    let info = texture_at(&data, t.offset, Container::Ktx2).unwrap().info;
+    let err = decode(&data[t.offset as usize..], &info, Subresource::default()).unwrap_err();
+    assert_eq!(err, DecodeError::Unsupported("BasisLZ-supercompressed KTX2"));
 }

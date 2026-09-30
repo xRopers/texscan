@@ -1,8 +1,8 @@
 //! Encoding RGBA images back into a texture's pixel format, and making mips: the reverse
 //! of [`crate::decode`], used by pack.
 //!
-//! Every format that decodes can be encoded, except signed BC4/BC5/BC6H, the 4:2:2 and
-//! planar video formats, and R11G11B10/R9G9B9E5. Block formats use `block_compression`
+//! Every format that decodes can be encoded, except signed BC4/BC5/BC6H, ETC2/EAC, ASTC,
+//! the 4:2:2 and planar video formats, and R11G11B10/R9G9B9E5. Block formats use `block_compression`
 //! (a CPU port of Intel's ISPC compressor), in parallel over rows of blocks. A palette
 //! format can only be written if every colour is already in its palette.
 //!
@@ -49,7 +49,7 @@ pub fn encode(image: &Image, pf: &PixelFormat, palette: Option<&[u8]>) -> Result
             palettized(image, bits, palette.ok_or_else(unsupported)?)
         }
         Decode::Channels(spec) => Ok(by_channels(image, &parse_channels(spec).ok_or_else(unsupported)?)),
-        Decode::Uyvy | Decode::None => Err(unsupported()),
+        Decode::Etc(_) | Decode::Astc | Decode::Uyvy | Decode::None => Err(unsupported()),
     }
 }
 

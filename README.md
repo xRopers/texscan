@@ -13,7 +13,7 @@ It's a sibling of [zscan](https://github.com/xRopers/zscan), which does the same
 
 ![texscan's desktop app: thumbnails of every texture in an archive, with a brick texture open in the preview](docs/images/texscan-gui-grid.png)
 
-**Status: early.** More formats (KTX1, PNG and others) and ETC/ASTC decoding are next.
+**Status: early.** More formats (KTX1, PNG and others) and Basis Universal are next.
 
 ## Build
 
@@ -103,11 +103,12 @@ Textures stored without a header can't be found this way. That includes Unity's 
 
 - Every KTX2 layout: mipmaps, cube maps, arrays and volume textures, with the level index read as written (usually smallest mip first).
 - Vulkan formats map to the same decoders and encoders as DDS: BC1–BC7 and the uncompressed formats preview, export and pack.
-- ETC2, EAC and ASTC textures are found and extracted with their exact size, but can't be previewed, exported as PNG or edited as PNG yet. You can still replace them with a `.ktx2` of the same format.
-- Supercompressed textures (Basis Universal, Zstandard, zlib) are found and extracted using their level index, but can't be decoded or packed yet.
+- ETC2, EAC and ASTC (LDR) textures preview and export as PNG. They can't be written from a PNG yet (there's no encoder), but can be replaced with a `.ktx2` of the same format. ASTC HDR is found and extracted but not decoded yet.
+- Zstandard- and zlib-supercompressed textures preview and export as PNG, but can't be packed yet: a re-compressed level would change size.
+- Basis Universal textures (ETC1S/BasisLZ and UASTC) are found and extracted using their level index, but can't be decoded yet.
 - `KTXorientation` is honoured: a texture stored bottom-up is shown and exported the right way up, and turned back when packed.
 
-Checked against the 50 KTX2 test files in Khronos's KTX-Software repository (BC, ETC2, ASTC including HDR, UASTC, Basis ETC1S, Zstandard, 3D, arrays, cube maps): every one is sized exactly, and the decodable ones export correctly and pack back.
+Checked against the 50 KTX2 test files in Khronos's KTX-Software repository (BC, ETC2, ASTC including HDR, UASTC, Basis ETC1S, Zstandard, 3D, arrays, cube maps): every one is sized exactly. The Zstandard test texture decodes to exactly the pixels of its uncompressed twin; the ETC2 and ASTC versions of the same image come within 2 levels of the uncompressed one (ASTC 4x4 exactly). Everything except Basis Universal and ASTC HDR exports, and the plain ones pack back.
 
 Texture names in the list are Vulkan's without the `VK_FORMAT_` prefix (`BC7_SRGB_BLOCK`), with the matching DXGI format alongside.
 

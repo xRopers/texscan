@@ -1853,6 +1853,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "paste"
+version = "1.0.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
 name = "peniko"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2242,6 +2248,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
+name = "ruzstd"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a252f5e20f038fe7b4ea53e073e65398d652c864cc162fc77c56c2f13717b888"
+dependencies = [
+ "twox-hash",
+]
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2532,12 +2547,15 @@ dependencies = [
  "crc32fast",
  "memchr",
  "memmap2",
+ "miniz_oxide 0.8.9",
  "png",
  "rayon",
+ "ruzstd",
  "serde",
  "serde_json",
  "tempfile",
  "texscan-fixtures",
+ "texture2ddecoder",
  "thiserror 2.0.21",
 ]
 
@@ -2546,6 +2564,8 @@ name = "texscan-fixtures"
 version = "0.1.0"
 dependencies = [
  "crc32fast",
+ "miniz_oxide 0.8.9",
+ "ruzstd",
  "serde_json",
 ]
 
@@ -2563,6 +2583,15 @@ dependencies = [
  "tempfile",
  "texscan-core",
  "texscan-fixtures",
+]
+
+[[package]]
+name = "texture2ddecoder"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "427ae8ec7f2f0fdd3146b77cfa44bea880caf066f7e55398a8467afe2645c832"
+dependencies = [
+ "paste",
 ]
 
 [[package]]
@@ -2687,6 +2716,12 @@ name = "tracing-core"
 version = "0.1.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
+
+[[package]]
+name = "twox-hash"
+version = "2.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5283634e518fe9e82c7b20520bb4bc209009fd16c82077c802f8111ecbb0117a"
 
 [[package]]
 name = "type-map"

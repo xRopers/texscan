@@ -6,16 +6,17 @@
 //!
 //! Pixel formats are Vulkan `VkFormat` numbers, named here without the `VK_FORMAT_`
 //! prefix and mapped to the matching DXGI format where there is one, so BC and the common
-//! uncompressed formats decode and pack like DDS. ETC2, EAC and ASTC are sized and found
-//! but not decoded yet; neither are supercompressed levels (BasisLZ, Zstandard, zlib, or
-//! a newer scheme such as Basis Universal's UASTC HDR 6x6 intermediate), whose size
-//! comes from the level index alone.
+//! uncompressed formats decode and pack like DDS. ETC2, EAC and ASTC LDR decode (through
+//! `texture2ddecoder`) but can't be written; ASTC HDR isn't decoded. Zstandard and zlib supercompressed levels
+//! are decompressed to decode them, but can't be written either; BasisLZ and newer
+//! schemes (such as Basis Universal's UASTC HDR 6x6 intermediate) are sized from the
+//! level index alone.
 //!
 //! Checked against the Khronos KTX-Software test files: every one parses to exactly its
 //! own length.
 
-use crate::format::{Container, Orientation, Reject, Storage, TextureFormat, TextureInfo, u32_le, u64_le};
-use crate::pixel::{self, Decode, Layout, PixelFormat};
+use crate::format::{Container, Ktx2Level, Orientation, Reject, Storage, TextureFormat, TextureInfo, u32_le, u64_le};
+use crate::pixel::{self, Decode, Etc, Layout, PixelFormat};
 
 pub struct Ktx2;
 
@@ -101,21 +102,25 @@ pub fn parse(data: &[u8]) -> Result<TextureInfo, Reject> {
     let mut levels = Vec::with_capacity(mips as usize);
     for m in 0..mips {
         let at = HEADER + m as usize * LEVEL_ENTRY;
-        let (offset, length) = (u64_le(data, at), u64_le(data, at + 8));
+        let (offset, length, uncompressed) = (u64_le(data, at), u64_le(data, at + 8), u64_le(data, at + 16));
         if offset < index_end as u64 {
             return Err(bad(format!("mip {m} starts at {offset}, inside the header")));
         }
         extend(&format!("mip {m}"), offset, length)?;
-        if supercompression == 0 && !matches!(pixel_format.layout, Layout::Unknown) {
+        // Plain and Zstandard/zlib levels must hold (once decompressed) exactly the
+        // images the format needs; BasisLZ and newer schemes store something else.
+        if matches!(supercompression, 0 | 2 | 3) && !matches!(pixel_format.layout, Layout::Unknown) {
             let (w, h, d) = ((width >> m).max(1), (height >> m).max(1), (depth >> m).max(1));
             let expected = pixel_format.layout.image_size(w, h) * u64::from(d) * u64::from(array_size * faces);
-            if length != expected {
-                return Err(bad(format!("mip {m} holds {length} bytes, but {} needs {expected}", pixel_format.name)));
+            let holds = if supercompression == 0 { length } else { uncompressed };
+            if holds != expected {
+                return Err(bad(format!("mip {m} holds {holds} bytes, but {} needs {expected}", pixel_format.name)));
             }
         }
-        levels.push((offset, length));
+        let uncompressed = if supercompression == 0 { length } else { uncompressed };
+        levels.push(Ktx2Level { offset, length, uncompressed });
     }
-    let header_size = levels.iter().filter(|l| l.1 > 0).map(|l| l.0).min().unwrap_or(index_end as u64);
+    let header_size = levels.iter().filter(|l| l.length > 0).map(|l| l.offset).min().unwrap_or(index_end as u64);
     let (kvd_at, kvd_len) = (field(56) as usize, field(60) as usize);
     let orientation = orientation(&data[kvd_at..kvd_at + kvd_len]);
     Ok(TextureInfo {
@@ -197,6 +202,10 @@ pub fn vk_format_info(vk: u32, supercompression: u32) -> PixelFormat {
         PixelFormat::new(name, None, Linear { bits }).with_decode(Decode::Masks { r, g, b, a, luminance: false, signed: 0 })
     };
     let opaque = |name: &'static str, layout: Layout| PixelFormat::new(name, None, layout);
+    let etc = |name: &'static str, bytes: u32, kind: Etc| PixelFormat::new(name, None, Block { bytes }).with_decode(Decode::Etc(kind));
+    let astc = |name: &'static str, width: u32, height: u32| {
+        PixelFormat::new(name, None, Tiles { width, height, bytes: 16 }).with_decode(Decode::Astc)
+    };
     let channels = |name: &'static str, bits: u32, spec: &'static str| {
         PixelFormat::new(name, None, Linear { bits }).with_decode(Decode::Channels(spec))
     };
@@ -292,20 +301,22 @@ pub fn vk_format_info(vk: u32, supercompression: u32) -> PixelFormat {
         144 => dxgi("BC6H_SFLOAT_BLOCK", 96),
         145 => dxgi("BC7_UNORM_BLOCK", 98),
         146 => dxgi("BC7_SRGB_BLOCK", 99),
-        147 => opaque("ETC2_R8G8B8_UNORM_BLOCK", Block { bytes: 8 }),
-        148 => opaque("ETC2_R8G8B8_SRGB_BLOCK", Block { bytes: 8 }),
-        149 => opaque("ETC2_R8G8B8A1_UNORM_BLOCK", Block { bytes: 8 }),
-        150 => opaque("ETC2_R8G8B8A1_SRGB_BLOCK", Block { bytes: 8 }),
-        151 => opaque("ETC2_R8G8B8A8_UNORM_BLOCK", Block { bytes: 16 }),
-        152 => opaque("ETC2_R8G8B8A8_SRGB_BLOCK", Block { bytes: 16 }),
-        153 => opaque("EAC_R11_UNORM_BLOCK", Block { bytes: 8 }),
-        154 => opaque("EAC_R11_SNORM_BLOCK", Block { bytes: 8 }),
-        155 => opaque("EAC_R11G11_UNORM_BLOCK", Block { bytes: 16 }),
-        156 => opaque("EAC_R11G11_SNORM_BLOCK", Block { bytes: 16 }),
+        147 => etc("ETC2_R8G8B8_UNORM_BLOCK", 8, Etc::Rgb),
+        148 => etc("ETC2_R8G8B8_SRGB_BLOCK", 8, Etc::Rgb),
+        149 => etc("ETC2_R8G8B8A1_UNORM_BLOCK", 8, Etc::Rgba1),
+        150 => etc("ETC2_R8G8B8A1_SRGB_BLOCK", 8, Etc::Rgba1),
+        151 => etc("ETC2_R8G8B8A8_UNORM_BLOCK", 16, Etc::Rgba8),
+        152 => etc("ETC2_R8G8B8A8_SRGB_BLOCK", 16, Etc::Rgba8),
+        153 => etc("EAC_R11_UNORM_BLOCK", 8, Etc::R11),
+        154 => etc("EAC_R11_SNORM_BLOCK", 8, Etc::R11Signed),
+        155 => etc("EAC_R11G11_UNORM_BLOCK", 16, Etc::Rg11),
+        156 => etc("EAC_R11G11_SNORM_BLOCK", 16, Etc::Rg11Signed),
         157..=184 => {
             let (w, h, unorm, srgb) = ASTC[(vk - 157) as usize / 2];
-            opaque(if vk % 2 == 1 { unorm } else { srgb }, Tiles { width: w, height: h, bytes: 16 })
+            astc(if vk % 2 == 1 { unorm } else { srgb }, w, h)
         }
+        // Not decoded: texture2ddecoder's HDR path puts speckles of wrong colour in real
+        // files (mean error 23 against the same image stored as half floats).
         1_000_066_000..=1_000_066_013 => {
             let i = (vk - 1_000_066_000) as usize;
             let (w, h, _, _) = ASTC[i];
@@ -360,7 +371,7 @@ mod tests {
         assert_eq!(info.pixel_format.dxgi, Some(98));
         assert_eq!(info.size, file.len() as u64);
         let Storage::Ktx2 { levels: index, .. } = &info.storage else { panic!() };
-        assert!(index[0].0 > index[2].0, "mip 0 is stored last");
+        assert!(index[0].offset > index[2].offset, "mip 0 is stored last");
         // Trailing bytes aren't part of it.
         file.extend_from_slice(b"next");
         assert_eq!(parse(&file).unwrap().size, info.size);
@@ -375,9 +386,12 @@ mod tests {
         assert!(matches!(parse(&wrong_size), Err(Reject::Bad(r)) if r.contains("holds 60 bytes")));
         let three_faces = build(37, 4, 4, 3, &[vec![0; 192]], 0);
         assert!(matches!(parse(&three_faces), Err(Reject::Bad(r)) if r.contains("3 faces")));
-        // Supercompressed levels aren't checked against the format: their size is theirs.
+        // A Zstandard level must decompress to the images the format needs...
         let zstd = build(145, 64, 64, 1, &[vec![9; 100]], 2);
-        assert_eq!(parse(&zstd).unwrap().size, zstd.len() as u64);
+        assert!(matches!(parse(&zstd), Err(Reject::Bad(r)) if r.contains("holds 100 bytes, but BC7_UNORM_BLOCK needs 4096")));
+        // ...but BasisLZ levels hold something else, so only their place is checked.
+        let basis = build(0, 64, 64, 1, &[vec![9; 100]], 1);
+        assert_eq!(parse(&basis).unwrap().size, basis.len() as u64);
         // Newer schemes (4 is Basis Universal's UASTC HDR 6x6 intermediate) too.
         let scheme4 = build(0, 64, 64, 1, &[vec![9; 100]], 4);
         assert_eq!(parse(&scheme4).unwrap().size, scheme4.len() as u64);

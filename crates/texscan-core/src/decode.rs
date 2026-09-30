@@ -10,10 +10,12 @@
 //! to 0–1 (no tone mapping). A format with only a red channel (R8, R16F, BC4...) is shown
 //! as grey. Premultiplied DXT2/DXT4 are not un-premultiplied.
 
+use std::borrow::Cow;
+use std::io::Read;
 use std::ops::Range;
 
 use crate::format::{Orientation, Storage, TextureInfo};
-use crate::pixel::{Decode, Layout};
+use crate::pixel::{Decode, Etc, Layout};
 
 /// An 8-bit RGBA image, rows top to bottom.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +43,22 @@ pub enum DecodeError {
     Unsupported(&'static str),
     #[error("texture data is shorter than its header says")]
     Short,
+    #[error("{0} can be read but not written yet")]
+    Supercompressed(&'static str),
+    #[error("decompressing mip {mip}: {reason}")]
+    Decompress { mip: u32, reason: String },
+    #[error("the {0} data is invalid")]
+    Corrupt(&'static str),
+}
+
+/// What a KTX2 supercompression scheme is called.
+fn scheme_name(scheme: u32) -> &'static str {
+    match scheme {
+        1 => "BasisLZ-supercompressed KTX2",
+        2 => "Zstandard-supercompressed KTX2",
+        3 => "zlib-supercompressed KTX2",
+        _ => "KTX2 with this supercompression scheme",
+    }
 }
 
 impl TextureInfo {
@@ -54,7 +72,19 @@ impl TextureInfo {
     }
 
     /// Where an image's bytes are, relative to the start of the texture (see [`Storage`]).
+    /// Supercompressed KTX2 images have no such place (see [`image_bytes`]).
     pub fn subresource_range(&self, sub: Subresource) -> Result<Range<usize>, DecodeError> {
+        if let Storage::Ktx2 { supercompression, .. } = &self.storage
+            && *supercompression != 0
+        {
+            return Err(DecodeError::Supercompressed(scheme_name(*supercompression)));
+        }
+        self.range_in_level_or_texture(sub)
+    }
+
+    /// For DDS and plain KTX2: the image's range in the texture. For supercompressed
+    /// KTX2: its range within its level once decompressed.
+    fn range_in_level_or_texture(&self, sub: Subresource) -> Result<Range<usize>, DecodeError> {
         let out = |what: &str, value: u32, count: u32| {
             DecodeError::OutOfRange(format!("{what} {value} doesn't exist (the texture has {count})"))
         };
@@ -74,18 +104,12 @@ impl TextureInfo {
             layout.image_size(w, h)
         };
         if let Storage::Ktx2 { levels, supercompression } = &self.storage {
-            if *supercompression != 0 {
-                return Err(DecodeError::Unsupported(match supercompression {
-                    1 => "BasisLZ-supercompressed KTX2",
-                    2 => "Zstandard-supercompressed KTX2",
-                    3 => "zlib-supercompressed KTX2",
-                    _ => "KTX2 with this supercompression scheme",
-                }));
-            }
-            let (offset, length) = levels[sub.mip as usize];
-            let start = offset + (u64::from(sub.layer) * u64::from(depth) + u64::from(sub.slice)) * image(sub.mip);
+            let level = levels[sub.mip as usize];
+            // Plain levels are addressed in the texture, decompressed ones from 0.
+            let base = if *supercompression == 0 { level.offset } else { 0 };
+            let start = base + (u64::from(sub.layer) * u64::from(depth) + u64::from(sub.slice)) * image(sub.mip);
             let end = start + image(sub.mip);
-            if end > offset + length {
+            if end > base + level.uncompressed {
                 return Err(DecodeError::Short);
             }
             return Ok(start as usize..end as usize);
@@ -99,10 +123,41 @@ impl TextureInfo {
     }
 }
 
+/// One image's stored bytes (still block-compressed or whatever the pixel format is), with
+/// KTX2 Zstandard or zlib supercompression undone. `texture` starts at the texture's
+/// first header byte.
+pub fn image_bytes<'a>(texture: &'a [u8], info: &TextureInfo, sub: Subresource) -> Result<Cow<'a, [u8]>, DecodeError> {
+    let Storage::Ktx2 { levels, supercompression } = &info.storage else {
+        return Ok(Cow::Borrowed(texture.get(info.subresource_range(sub)?).ok_or(DecodeError::Short)?));
+    };
+    if *supercompression == 0 {
+        return Ok(Cow::Borrowed(texture.get(info.subresource_range(sub)?).ok_or(DecodeError::Short)?));
+    }
+    let range = info.range_in_level_or_texture(sub)?;
+    let level = levels[sub.mip as usize];
+    let stored = texture.get(level.offset as usize..(level.offset + level.length) as usize).ok_or(DecodeError::Short)?;
+    let fail = |reason: String| DecodeError::Decompress { mip: sub.mip, reason };
+    let limit = level.uncompressed as usize;
+    let whole = match supercompression {
+        2 => {
+            let mut out = Vec::with_capacity(limit);
+            let decoder = ruzstd::decoding::StreamingDecoder::new(stored).map_err(|e| fail(e.to_string()))?;
+            decoder.take(limit as u64 + 1).read_to_end(&mut out).map_err(|e| fail(e.to_string()))?;
+            out
+        }
+        3 => miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(stored, limit + 1).map_err(|e| fail(format!("{e:?}")))?,
+        other => return Err(DecodeError::Unsupported(scheme_name(*other))),
+    };
+    if whole.len() != limit {
+        return Err(fail(format!("{} bytes, the level index says {limit}", whole.len())));
+    }
+    Ok(Cow::Owned(whole[range].to_vec()))
+}
+
 /// Decode one image. `texture` starts at the texture's first header byte.
 pub fn decode(texture: &[u8], info: &TextureInfo, sub: Subresource) -> Result<Image, DecodeError> {
-    let range = info.subresource_range(sub)?;
-    let data = texture.get(range).ok_or(DecodeError::Short)?;
+    let bytes = image_bytes(texture, info, sub)?;
+    let data = &bytes[..];
     let (width, height, _) = info.mip_size(sub.mip);
     let pf = info.pixel_format;
     let unsupported = || DecodeError::Unsupported(pf.name);
@@ -111,6 +166,29 @@ pub fn decode(texture: &[u8], info: &TextureInfo, sub: Subresource) -> Result<Im
         Decode::Dxgi => decode_dxgi(pf.dxgi.ok_or_else(unsupported)?, data, w, h)?,
         Decode::Uyvy => pairs(data, w, h, Pairs::Yuv { y: [1, 3], u: 0, v: 2, sample: 1 }),
         Decode::Channels(spec) => by_channels(data, w * h, &parse_channels(spec).ok_or_else(unsupported)?),
+        Decode::Etc(kind) => {
+            use texture2ddecoder as t;
+            let decoder: T2dDecoder = match kind {
+                Etc::Rgb => t::decode_etc2_rgb,
+                Etc::Rgba1 => t::decode_etc2_rgba1,
+                Etc::Rgba8 => t::decode_etc2_rgba8,
+                Etc::R11 => t::decode_eacr,
+                Etc::R11Signed => t::decode_eacr_signed,
+                Etc::Rg11 => t::decode_eacrg,
+                Etc::Rg11Signed => t::decode_eacrg_signed,
+            };
+            let rgba = t2d("ETC2/EAC", |px| decoder(data, w, h, px), w * h)?;
+            match kind {
+                // One channel shows as grey; two leave blue empty (mid-grey when signed).
+                Etc::R11 | Etc::R11Signed => grey_from_red(rgba),
+                Etc::Rg11Signed => with_blue(rgba, 128),
+                _ => rgba,
+            }
+        }
+        Decode::Astc => {
+            let Layout::Tiles { width: bw, height: bh, .. } = pf.layout else { return Err(unsupported()) };
+            t2d("ASTC", |px| texture2ddecoder::decode_astc(data, w, h, bw as usize, bh as usize, px), w * h)?
+        }
         Decode::Rxgb => {
             let mut rgba = blocks(data, w, h, 16, Block::Rgba(bcdec_rs::bc3));
             for px in rgba.as_chunks_mut::<4>().0 {
@@ -154,6 +232,50 @@ impl Image {
         }
         self
     }
+}
+
+type T2dDecoder = fn(&[u8], usize, usize, &mut [u32]) -> Result<(), &'static str>;
+
+/// Run a `texture2ddecoder` decoder over `count` pixels. It can panic on invalid block
+/// data (its ASTC bit reader indexes out of range), so a panic becomes an error rather
+/// than taking down the caller, which may be a thread pool.
+fn t2d(
+    what: &'static str,
+    decode: impl FnOnce(&mut [u32]) -> Result<(), &'static str>,
+    count: usize,
+) -> Result<Vec<u8>, DecodeError> {
+    let mut pixels = vec![0u32; count];
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode(&mut pixels))) {
+        Ok(Ok(())) => Ok(bgra_to_rgba(&pixels)),
+        Ok(Err(_)) => Err(DecodeError::Short),
+        Err(_) => Err(DecodeError::Corrupt(what)),
+    }
+}
+
+/// `texture2ddecoder` writes BGRA words.
+fn bgra_to_rgba(pixels: &[u32]) -> Vec<u8> {
+    pixels
+        .iter()
+        .flat_map(|p| {
+            let [b, g, r, a] = p.to_le_bytes();
+            [r, g, b, a]
+        })
+        .collect()
+}
+
+fn grey_from_red(mut rgba: Vec<u8>) -> Vec<u8> {
+    for px in rgba.as_chunks_mut::<4>().0 {
+        px[1] = px[0];
+        px[2] = px[0];
+    }
+    rgba
+}
+
+fn with_blue(mut rgba: Vec<u8>, blue: u8) -> Vec<u8> {
+    for px in rgba.as_chunks_mut::<4>().0 {
+        px[2] = blue;
+    }
+    rgba
 }
 
 /// A `bcdec_rs` block decoder and what it writes.
@@ -551,6 +673,46 @@ mod tests {
         // R32F is D3D9's name for R32_FLOAT.
         let r32f = PixelFormat::new("R32F", Some(41), Layout::Linear { bits: 32 });
         assert_eq!(one(&1.0f32.to_le_bytes(), r32f), [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn invalid_astc_is_an_error_not_a_crash() {
+        let astc = PixelFormat::new("ASTC_6x6_UNORM_BLOCK", None, Layout::Tiles { width: 6, height: 6, bytes: 16 })
+            .with_decode(Decode::Astc);
+        // Random blocks, some of which make texture2ddecoder's bit reader overrun.
+        let mut x = 0x1234_5678_9abc_def1u64;
+        let mut failures = 0;
+        for _ in 0..64 {
+            let block: Vec<u8> = (0..16)
+                .map(|_| {
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
+                    x as u8
+                })
+                .collect();
+            match decode(&block, &info(6, 6, astc), Subresource::default()) {
+                Ok(image) => assert_eq!(image.rgba.len(), 6 * 6 * 4),
+                Err(e) => {
+                    assert_eq!(e, DecodeError::Corrupt("ASTC"));
+                    failures += 1;
+                }
+            }
+        }
+        assert!(failures > 0, "the random blocks should include some the decoder can't handle");
+    }
+
+    #[test]
+    fn astc_void_extent_block() {
+        // A solid-colour ("void-extent") block: RGBA as 16-bit values.
+        let mut block = vec![0xFC, 0xFD, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+        for v in [0xFFFFu16, 0x8000, 0x0000, 0xFFFF] {
+            block.extend_from_slice(&v.to_le_bytes());
+        }
+        let astc = PixelFormat::new("ASTC_4x4_UNORM_BLOCK", None, Layout::Tiles { width: 4, height: 4, bytes: 16 })
+            .with_decode(Decode::Astc);
+        let out = decode(&block, &info(4, 4, astc), Subresource::default()).unwrap();
+        assert!(out.rgba.chunks(4).all(|p| p == [255, 128, 0, 255]), "{:?}", &out.rgba[..4]);
     }
 
     #[test]

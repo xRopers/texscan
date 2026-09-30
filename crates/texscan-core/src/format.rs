@@ -64,11 +64,22 @@ pub enum Storage {
     /// Right after the header, layer by layer, each layer with all its mips, each mip with
     /// all its slices.
     Dds,
-    /// A level index: (offset from the start of the texture, length) per mip. Within a
-    /// level: layers, then faces, then slices. `supercompression` is KTX2's scheme
-    /// (0 none, 1 BasisLZ, 2 Zstandard, 3 zlib, others newer or vendor-defined);
-    /// compressed levels can't be read yet.
-    Ktx2 { levels: Vec<(u64, u64)>, supercompression: u32 },
+    /// A level index, one entry per mip. Within a level: layers, then faces, then
+    /// slices. `supercompression` is KTX2's scheme (0 none, 1 BasisLZ, 2 Zstandard,
+    /// 3 zlib, others newer or vendor-defined); Zstandard and zlib levels are
+    /// decompressed to decode them.
+    Ktx2 { levels: Vec<Ktx2Level>, supercompression: u32 },
+}
+
+/// Where one KTX2 mip level is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ktx2Level {
+    /// From the start of the texture.
+    pub offset: u64,
+    /// Bytes stored (compressed, if the texture is supercompressed).
+    pub length: u64,
+    /// Bytes once decompressed.
+    pub uncompressed: u64,
 }
 
 /// How rows and columns are stored, when not left to right and top to bottom (KTX2's

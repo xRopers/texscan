@@ -270,11 +270,11 @@ fn a_ktx2_archive() {
     let mut h = harness();
     h.state_mut().request(Action::OpenFile(path));
     settle(&mut h);
-    h.get_by_label("9 textures");
+    h.get_by_label("12 textures");
     h.get_by_label("2 rejected");
-    // Everything but the ASTC and Zstandard-supercompressed textures has a thumbnail.
+    // Everything but the Basis Universal texture has a thumbnail.
     wait_until(&mut h, "thumbnails", |app| !app.thumbnail_counts().2 && app.thumbnail_counts().0 > 0);
-    assert_eq!(h.state().thumbnail_counts(), (7, 2, false));
+    assert_eq!(h.state().thumbnail_counts(), (11, 1, false));
     let cube = fixture.expected.iter().position(|e| e.spec.cube).unwrap() as u32;
     h.state_mut().select(cube);
     h.state_mut().sub.layer = 4;

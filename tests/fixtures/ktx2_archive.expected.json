@@ -1,16 +1,16 @@
 {
-  "description": "KTX2 textures (BC7, cube, array, volume, 24-bit, ASTC, supercompressed) and a DDS in an archive, plus traps",
+  "description": "KTX2 textures (BC7, cube, array, volume, 24-bit, ETC2, ASTC, Zstandard, zlib, BasisLZ) and a DDS in an archive, plus traps",
   "rejected": [
     {
-      "offset": 62640,
+      "offset": 74126,
       "reason": "3 faces"
     },
     {
-      "offset": 63109,
+      "offset": 74595,
       "reason": "truncated"
     }
   ],
-  "size": 79585,
+  "size": 91071,
   "textures": [
     {
       "array_size": 1,
@@ -119,8 +119,8 @@
     },
     {
       "array_size": 1,
-      "crc32": "b020ba3a",
-      "decodable": false,
+      "crc32": "e9d91022",
+      "decodable": true,
       "depth": 1,
       "dxgi_format": null,
       "faces": 1,
@@ -134,8 +134,8 @@
     },
     {
       "array_size": 1,
-      "crc32": "b2596ae8",
-      "decodable": false,
+      "crc32": "bac4b49e",
+      "decodable": true,
       "depth": 1,
       "dxgi_format": 71,
       "faces": 1,
@@ -144,7 +144,52 @@
       "mips": 7,
       "offset": 61289,
       "pixel_format": "BC1_RGBA_UNORM_BLOCK",
-      "size": 1311,
+      "size": 3213,
+      "width": 64
+    },
+    {
+      "array_size": 1,
+      "crc32": "ee2025d5",
+      "decodable": true,
+      "depth": 1,
+      "dxgi_format": null,
+      "faces": 1,
+      "format": "ktx2",
+      "height": 20,
+      "mips": 3,
+      "offset": 64502,
+      "pixel_format": "ETC2_R8G8B8_UNORM_BLOCK",
+      "size": 592,
+      "width": 24
+    },
+    {
+      "array_size": 1,
+      "crc32": "d551f664",
+      "decodable": true,
+      "depth": 1,
+      "dxgi_format": 28,
+      "faces": 6,
+      "format": "ktx2",
+      "height": 16,
+      "mips": 5,
+      "offset": 65094,
+      "pixel_format": "R8G8B8A8_UNORM",
+      "size": 8555,
+      "width": 16
+    },
+    {
+      "array_size": 1,
+      "crc32": "da94a8ea",
+      "decodable": false,
+      "depth": 1,
+      "dxgi_format": null,
+      "faces": 1,
+      "format": "ktx2",
+      "height": 32,
+      "mips": 7,
+      "offset": 73649,
+      "pixel_format": "UNDEFINED (Basis Universal ETC1S)",
+      "size": 437,
       "width": 64
     }
   ]

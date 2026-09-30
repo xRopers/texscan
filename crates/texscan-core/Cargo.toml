@@ -12,10 +12,13 @@ block_compression.workspace = true
 crc32fast.workspace = true
 memchr.workspace = true
 memmap2.workspace = true
+miniz_oxide.workspace = true
 png.workspace = true
 rayon.workspace = true
+ruzstd.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+texture2ddecoder.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
